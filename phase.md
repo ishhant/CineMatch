@@ -2,33 +2,33 @@
 
 ```
 ┌─────────────────────────┐
-│  Phase 1: Foundation     │ ──► Setup Django, configure SQLite database & schemas
+│  Phase 1: Foundation     │ ──► Setup Django REST API, PyMongo & MongoDB Atlas, React Vite
 └─────────────────────────┘
             │
             ▼
 ┌─────────────────────────┐
-│  Phase 2: Authentication│ ──► User register/login loops, session management
+│  Phase 2: Authentication│ ──► User register/login loops, Admin/Staff privileges
 └─────────────────────────┘
             │
             ▼
 ┌─────────────────────────┐
-│  Phase 3: Core CRUD     │ ──► Movie library browsing, Watchlist adding/purging
+│  Phase 3: Core CRUD     │ ──► Movie catalog, Watchlist CRUD, Admin Add/Delete to MongoDB
 └─────────────────────────┘
             │
             ▼
 ┌─────────────────────────┐
-│  Phase 4: Async Engine  │ ──► Integration of JS AJAX for instant movie search
+│  Phase 4: Async Engine  │ ──► Live title search & multi-tier genre/rating filters
 └─────────────────────────┘
             │
             ▼
 ┌─────────────────────────┐
-│  Phase 5: Reporting & UI│ ──► CSV/Analytical document downloads, final styling
+│  Phase 5: Reviews & UI  │ ──► Community 1-5 star reviews, dynamic ratings, Dark Cinema UI
 └─────────────────────────┘
 ```
 
-## Milestone Descriptions
-1.  **Phase 1 (Foundation):** Environment setup, database structural initialization, routing baseline.
-2.  **Phase 2 (Authentication):** Enforcing secure profile separation, sign-up constraints.
-3.  **Phase 3 (Core CRUD):** Implementing movie dashboard views and watchlist arrays.
-4.  **Phase 4 (Async Engine):** Eliminating standard page refreshes for lookups via native Javascript fetch hooks.
-5.  **Phase 5 (Reporting & UI):** Generating analytical dashboard downloads and clean interface presentation.
+## Milestone Status & Descriptions
+1.  **Phase 1 (Foundation): [COMPLETE]** Environment configured, Django 6 + React 18 + PyMongo integrated, CORS enabled, `.env` setup.
+2.  **Phase 2 (Authentication & Admin): [COMPLETE]** Session auth API, superuser privileges, and In-App Admin detection.
+3.  **Phase 3 (Core CRUD): [COMPLETE]** Movie catalog display, private watchlist adding/removing, and Admin "+ Add Movie" / "Delete Movie" directly updating MongoDB.
+4.  **Phase 4 (Async Engine): [COMPLETE]** Debounced real-time search and genre filter pills with zero full-page reloads.
+5.  **Phase 5 (Reviews & UI Polish): [COMPLETE]** Interactive community review system (1-5 stars with comments, dynamic average calculation), spotlight hero banner, responsive card grid.

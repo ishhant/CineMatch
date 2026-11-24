@@ -1,30 +1,34 @@
 # System Architecture - CineMatch
 
-## 1. MVT Design Pattern
-The project strictly implements the standard **Django Model-View-Template (MVT)** architectural paradigm:
-*   **Model:** Manages the data schema, relational mappings, and interfaces with the database through Django ORM.
-*   **View:** Processes business logic, executes database queries, renders template contexts, and handles AJAX endpoints.
-*   **Template:** Dynamic HTML presentation layer styled with modern CSS variables and manipulated via client-side JavaScript.
+## 1. Architectural Pattern: Decoupled Full-Stack (SPA + REST API)
+The project implements a modern decoupled architecture:
+*   **Frontend (React SPA):** High-performance Single Page Application powered by Vite and Lucide React icons, running on port 5173. Provides instant search, real-time filtering, watchlist management, and an Admin Movie Management Portal.
+*   **Backend (Django REST Framework / API):** Robust Python server running on port 8000 handling URL routing, authentication sessions, CORS negotiation, and business logic.
+*   **Database Layer (MongoDB Atlas NoSQL):** Cloud NoSQL document storage connected via PyMongo for scalable storage of movies, reviews, and watchlists.
 
 ## 2. Component Layout
 ```
-[ Client Browser ] 
+[ User Browser (Client) ] 
         │ 
-        ▼ (HTTP / AJAX Request)
+        ▼
+[ React SPA Frontend (Vite) ]
+        │
+        ▼ (HTTP REST JSON API / CORS)
 [ Django Web Server ]
         │
-        ├──► [ View / URL Dispatcher ]
+        ├──► [ URL Dispatcher & Views ]
         │          │
-        │          ├──► [ Forms/Validations ]
+        │          ├──► [ Session & User Auth ] ──► [ Django Auth / Sessions ]
         │          │
-        │          └──► [ Django ORM ] ──► [ SQLite Database ]
-        │
-        ▼ (Rendered Context / JSON Response)
-[ UI Template Layer ]
+        │          └──► [ PyMongo Driver ] ───────► [ MongoDB Atlas (Cloud) ]
+        │                                                ├── movies collection
+        │                                                ├── reviews collection
+        │                                                └── watchlists collection
 ```
 
 ## 3. Technology Stack & Packages
-*   **Backend Framework:** Django (Python) [0.1.4]
-*   **Database:** SQLite [0.1.4]
-*   **Frontend Interactivity:** Native JavaScript + AJAX [0.1.4]
-*   **Styling:** HTML5 + Custom CSS Variables [0.1.4]
+*   **Frontend Framework:** React 18+ (Vite)
+*   **Icons & UI:** Lucide React + Modern Dark Cinema CSS
+*   **Backend Framework:** Django 6.x (Python 3.14)
+*   **API Protocol:** REST (JSON) with `django-cors-headers`
+*   **Database:** MongoDB Atlas (Cloud NoSQL) via `pymongo` & `dnspython`
