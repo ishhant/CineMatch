@@ -6,7 +6,11 @@ import {
 } from 'lucide-react';
 import './App.css';
 
-const ENV_API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+let rawEnvUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+if (rawEnvUrl && !rawEnvUrl.endsWith('/api')) {
+  rawEnvUrl += '/api';
+}
+const ENV_API_URL = rawEnvUrl;
 
 const API_CANDIDATES = [
   ...(ENV_API_URL ? [ENV_API_URL] : []),
