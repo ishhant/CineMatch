@@ -10,8 +10,19 @@ from movies.db import get_collection, check_connection
 from .decorators import admin_required, get_session_user
 
 def _get_current_user(request):
-    """Returns the authenticated user dict from session if valid."""
-    username = request.session.get('username')
+    """Returns the authenticated user dict from session, query params, or JSON body if valid."""
+    username = None
+    if hasattr(request, 'session'):
+        username = request.session.get('username')
+    if not username and hasattr(request, 'GET'):
+        username = request.GET.get('username') or request.GET.get('admin_username')
+    if not username and getattr(request, 'body', None):
+        try:
+            body_data = json.loads(request.body)
+            username = body_data.get('username') or body_data.get('admin_username')
+        except Exception:
+            pass
+
     users_col = get_collection('users')
     if users_col is None or not username:
         return None
@@ -21,9 +32,34 @@ def _get_current_user(request):
             "id": str(user['_id']),
             "username": user['username'],
             "email": user.get('email', ''),
-            "is_staff": bool(user.get('is_staff', False))
+            "is_staff": bool(user.get('is_staff', False)),
+            "points": int(user.get('points', 0))
         }
     return None
+
+def _grant_points(username, amount, reason=""):
+    """
+    Awards points to a user. Main admin and staff users are exempt from earning points.
+    """
+    if not username or amount == 0:
+        return 0
+    users_col = get_collection('users')
+    if users_col is None:
+        return 0
+    user = users_col.find_one({"username": {"$regex": f"^{username}$", "$options": "i"}})
+    if not user:
+        return 0
+    # Main admin / staff do not collect points
+    if user.get('is_staff', False) or user.get('username', '').lower() == 'admin':
+        return 0
+
+    current_points = int(user.get('points', 0))
+    new_points = max(0, current_points + amount)
+    users_col.update_one(
+        {"_id": user['_id']},
+        {"$set": {"points": new_points}}
+    )
+    return new_points
 
 def _normalize_genres(data):
     """Normalizes input genres into a clean list of strings."""
@@ -161,7 +197,18 @@ def api_movie_detail(request, movie_id):
     if reviews_col is not None:
         try:
             cursor = reviews_col.find({"movie_id": str(movie_id)}).sort("created_at", -1)
-            reviews = [_serialize_mongo_doc(r) for r in cursor]
+            users_col = get_collection('users')
+            for r in cursor:
+                s = _serialize_mongo_doc(r)
+                if 'likes_count' not in s:
+                    s['likes_count'] = len(s.get('liked_by', []))
+                if 'liked_by' not in s or not isinstance(s.get('liked_by'), list):
+                    s['liked_by'] = []
+                # Fetch reviewer community points and staff badge
+                reviewer_doc = users_col.find_one({"username": {"$regex": f"^{s.get('username')}$", "$options": "i"}}) if users_col is not None else None
+                s['user_points'] = int(reviewer_doc.get('points', 0)) if reviewer_doc else 0
+                s['user_is_staff'] = bool(reviewer_doc.get('is_staff', False)) if reviewer_doc else False
+                reviews.append(s)
         except Exception:
             pass
 
@@ -244,11 +291,20 @@ def api_add_review(request, movie_id):
                 query = {"_id": ObjectId(movie_id)} if ObjectId.is_valid(movie_id) else {"title": movie_id}
                 movies_col.update_one(query, {"$set": {"global_rating": avg}})
 
+            if not is_updated:
+                _grant_points(username, 2, "Review submitted")
+
+            users_col = get_collection('users')
+            u_doc = users_col.find_one({"username": {"$regex": f"^{username}$", "$options": "i"}}) if users_col is not None else None
+            curr_pts = int(u_doc.get('points', 0)) if u_doc else 0
+
             return JsonResponse({
                 "success": True, 
                 "review": _serialize_mongo_doc(saved_review),
                 "global_rating": avg,
-                "is_updated": is_updated
+                "is_updated": is_updated,
+                "user_points": curr_pts,
+                "points_awarded": 2 if not is_updated else 0
             })
 
         return JsonResponse({"error": "Database not connected"}, status=503)
@@ -396,6 +452,7 @@ def api_register(request):
             "password_hash": make_password(password),
             "email": email,
             "is_staff": is_staff,
+            "points": 0,
             "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         }
         res = users_col.insert_one(new_user)
@@ -410,7 +467,8 @@ def api_register(request):
             "user": {
                 "username": username, 
                 "email": email,
-                "is_staff": is_staff
+                "is_staff": is_staff,
+                "points": 0
             }
         })
     except Exception as e:
@@ -443,7 +501,8 @@ def api_login(request):
                 "user": {
                     "username": user['username'], 
                     "email": user.get('email', ''),
-                    "is_staff": bool(user.get('is_staff', False))
+                    "is_staff": bool(user.get('is_staff', False)),
+                    "points": int(user.get('points', 0))
                 }
             })
         return JsonResponse({"error": "Invalid username or password"}, status=401)
@@ -726,6 +785,12 @@ def api_admin_stats(request):
             if movies_with_rating:
                 avg_rating = round(sum(float(m.get('global_rating', 0)) for m in movies_with_rating) / len(movies_with_rating), 1)
 
+        submissions_col = get_collection('movie_submissions')
+        pending_submissions = submissions_col.count_documents({"status": "pending"}) if submissions_col is not None else 0
+        total_submissions = submissions_col.count_documents({}) if submissions_col is not None else 0
+        all_user_docs = list(users_col.find({"is_staff": False})) if users_col is not None else []
+        total_community_points = sum(int(u.get('points', 0)) for u in all_user_docs)
+
         return JsonResponse({
             "success": True,
             "stats": {
@@ -733,7 +798,10 @@ def api_admin_stats(request):
                 "total_movies": total_movies,
                 "total_reviews": total_reviews,
                 "total_watchlists": total_watchlists,
-                "avg_rating": avg_rating
+                "avg_rating": avg_rating,
+                "pending_submissions": pending_submissions,
+                "total_submissions": total_submissions,
+                "total_community_points": total_community_points
             }
         })
     except Exception as e:
@@ -742,7 +810,7 @@ def api_admin_stats(request):
 @csrf_exempt
 @admin_required
 def api_admin_users(request):
-    """Returns list of registered users with activity stats."""
+    """Returns list of registered users with activity stats and contribution points."""
     try:
         users_col = get_collection('users')
         reviews_col = get_collection('reviews')
@@ -763,6 +831,7 @@ def api_admin_users(request):
                 "username": uname,
                 "email": u.get('email', ''),
                 "is_staff": bool(u.get('is_staff', False)),
+                "points": int(u.get('points', 0)),
                 "created_at": u.get('created_at', 'N/A'),
                 "reviews_count": rev_count,
                 "watchlist_count": watch_count
@@ -882,4 +951,326 @@ def api_admin_recent_reviews(request):
         })
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+# ==============================================================================
+# COMMUNITY CONTRIBUTION & POINTS SYSTEM ENDPOINTS
+# ==============================================================================
+
+@csrf_exempt
+def api_toggle_review_like(request, review_id):
+    """
+    Toggles a like on a review.
+    Awards +1 point when liked (-1 if unliked). Main admin/staff exempt from earning points.
+    """
+    if request.method != 'POST':
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    user = _get_current_user(request)
+    if not user:
+        return JsonResponse({"error": "You must be signed in to like a review."}, status=401)
+
+    reviews_col = get_collection('reviews')
+    if reviews_col is None:
+        return JsonResponse({"error": "Database not connected"}, status=503)
+
+    query = {"_id": ObjectId(review_id)} if ObjectId.is_valid(review_id) else {"_id": review_id}
+    review = reviews_col.find_one(query)
+    if not review:
+        review = reviews_col.find_one({"id": str(review_id)})
+        if review:
+            query = {"_id": review["_id"]}
+    if not review:
+        return JsonResponse({"error": "Review not found"}, status=404)
+
+    username = user['username']
+    liked_by = review.get('liked_by', [])
+    if not isinstance(liked_by, list):
+        liked_by = []
+
+    has_liked = any(u.lower() == username.lower() for u in liked_by)
+    if has_liked:
+        # Unlike
+        liked_by = [u for u in liked_by if u.lower() != username.lower()]
+        likes_count = max(0, len(liked_by))
+        reviews_col.update_one(query, {"$set": {"liked_by": liked_by, "likes_count": likes_count}})
+        _grant_points(username, -1, "Review unliked")
+        action = "unliked"
+    else:
+        # Like
+        liked_by.append(username)
+        likes_count = len(liked_by)
+        reviews_col.update_one(query, {"$set": {"liked_by": liked_by, "likes_count": likes_count}})
+        _grant_points(username, 1, "Review liked")
+        action = "liked"
+
+    users_col = get_collection('users')
+    updated_user = users_col.find_one({"username": {"$regex": f"^{username}$", "$options": "i"}}) if users_col is not None else None
+    updated_points = int(updated_user.get('points', 0)) if updated_user else 0
+
+    return JsonResponse({
+        "success": True,
+        "action": action,
+        "review_id": str(review.get('_id', review_id)),
+        "has_liked": not has_liked,
+        "likes_count": likes_count,
+        "liked_by": liked_by,
+        "user_points": updated_points
+    })
+
+@csrf_exempt
+def api_contribute_movie(request):
+    """
+    Allows authenticated users to submit/contribute a movie for staff review.
+    Upon admin approval, the contributor earns +10 points.
+    """
+    if request.method != 'POST':
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+
+    user = _get_current_user(request)
+    if not user:
+        return JsonResponse({"error": "You must be signed in to contribute a movie."}, status=401)
+
+    try:
+        data = json.loads(request.body)
+        title = str(data.get('title', '')).strip()
+        release_year = int(data.get('release_year', 2024))
+        genres = _normalize_genres(data)
+        synopsis = str(data.get('synopsis', '')).strip()
+        poster_url = str(data.get('poster_url', '')).strip()
+        video_url = str(data.get('video_url', '')).strip()
+
+        if not title:
+            return JsonResponse({"error": "Movie title is required."}, status=400)
+        if not synopsis:
+            return JsonResponse({"error": "Synopsis is required."}, status=400)
+
+        submissions_col = get_collection('movie_submissions')
+        if submissions_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        submission = {
+            "title": title,
+            "release_year": release_year,
+            "genres": genres,
+            "synopsis": synopsis,
+            "poster_url": poster_url,
+            "video_url": video_url,
+            "submitted_by": user['username'],
+            "status": "pending",  # 'pending' | 'approved' | 'rejected'
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        }
+
+        res = submissions_col.insert_one(submission)
+        submission['_id'] = str(res.inserted_id)
+
+        return JsonResponse({
+            "success": True,
+            "message": f"'{title}' submitted successfully! Once staff reviews and accepts it, +10 points will be awarded to your account.",
+            "submission": _serialize_mongo_doc(submission)
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@admin_required
+def api_admin_submissions(request):
+    """Returns all community movie submissions for admin moderation."""
+    try:
+        submissions_col = get_collection('movie_submissions')
+        if submissions_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        docs = list(submissions_col.find().sort("created_at", -1))
+        submissions = [_serialize_mongo_doc(d) for d in docs]
+
+        return JsonResponse({
+            "success": True,
+            "count": len(submissions),
+            "submissions": submissions
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@admin_required
+def api_admin_accept_submission(request, submission_id):
+    """
+    Accepts/approves a community movie submission and publishes it to the main movies catalog.
+    Admin may modify fields before acceptance.
+    Contributor receives +10 points.
+    """
+    if request.method != 'POST':
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        submissions_col = get_collection('movie_submissions')
+        movies_col = get_collection('movies')
+        if submissions_col is None or movies_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        s_query = {"_id": ObjectId(submission_id)} if ObjectId.is_valid(submission_id) else {"_id": submission_id}
+        submission = submissions_col.find_one(s_query)
+        if not submission:
+            submission = submissions_col.find_one({"id": str(submission_id)})
+            if submission:
+                s_query = {"_id": submission["_id"]}
+        if not submission:
+            return JsonResponse({"error": "Submission not found"}, status=404)
+
+        if submission.get('status') == 'approved':
+            return JsonResponse({"error": "This submission has already been approved."}, status=400)
+
+        # Allow admin overrides from payload if provided
+        data = {}
+        if request.body:
+            try:
+                data = json.loads(request.body)
+            except Exception:
+                pass
+
+        title = str(data.get('title') or submission.get('title', '')).strip()
+        try:
+            release_year = int(data.get('release_year') or submission.get('release_year', 2024))
+        except (ValueError, TypeError):
+            release_year = 2024
+        genres = _normalize_genres(data) if data.get('genres') else submission.get('genres', ['Action'])
+        synopsis = str(data.get('synopsis') or submission.get('synopsis', '')).strip()
+        poster_url = str(data.get('poster_url') or submission.get('poster_url', '')).strip()
+        video_url = str(data.get('video_url') or submission.get('video_url', '')).strip()
+        contributor = submission.get('submitted_by', 'Community Member')
+
+        # Insert new movie into main catalog
+        new_movie = {
+            "title": title,
+            "release_year": release_year,
+            "genres": genres,
+            "synopsis": synopsis,
+            "poster_url": poster_url,
+            "video_url": video_url,
+            "global_rating": 0.0,
+            "submitted_by": contributor,
+            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        }
+        res = movies_col.insert_one(new_movie)
+        new_movie['_id'] = res.inserted_id
+
+        # Mark submission as approved
+        submissions_col.update_one(s_query, {
+            "$set": {
+                "status": "approved",
+                "published_movie_id": str(res.inserted_id),
+                "reviewed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            }
+        })
+
+        # Award +10 points to contributor
+        updated_pts = _grant_points(contributor, 10, f"Accepted submission for '{title}'")
+
+        return JsonResponse({
+            "success": True,
+            "message": f"Movie '{title}' approved & published! +10 points awarded to contributor {contributor}.",
+            "movie": _serialize_mongo_doc(new_movie),
+            "contributor": contributor,
+            "contributor_points": updated_pts
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@admin_required
+def api_admin_reject_submission(request, submission_id):
+    """Rejects a community movie submission."""
+    if request.method != 'POST':
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        submissions_col = get_collection('movie_submissions')
+        if submissions_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        s_query = {"_id": ObjectId(submission_id)} if ObjectId.is_valid(submission_id) else {"_id": submission_id}
+        submission = submissions_col.find_one(s_query)
+        if not submission:
+            submission = submissions_col.find_one({"id": str(submission_id)})
+            if submission:
+                s_query = {"_id": submission["_id"]}
+        if not submission:
+            return JsonResponse({"error": "Submission not found"}, status=404)
+
+        submissions_col.update_one(s_query, {
+            "$set": {
+                "status": "rejected",
+                "reviewed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+            }
+        })
+
+        return JsonResponse({
+            "success": True,
+            "message": f"Submission for '{submission.get('title')}' has been rejected."
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+def api_leaderboard(request):
+    """
+    Returns community leaderboard ranking members by earned reputation/points.
+    Includes points, reviews count, accepted contributions count, and badge title.
+    """
+    try:
+        users_col = get_collection('users')
+        reviews_col = get_collection('reviews')
+        movies_col = get_collection('movies')
+
+        if users_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        # Exclude staff/admin accounts to spotlight community contributors
+        user_docs = list(users_col.find({"is_staff": {"$ne": True}}).sort("points", -1).limit(50))
+
+        leaderboard = []
+        for idx, u in enumerate(user_docs, start=1):
+            uname = u.get('username', '')
+            pts = int(u.get('points', 0))
+
+            rev_count = reviews_col.count_documents({"username": {"$regex": f"^{uname}$", "$options": "i"}}) if reviews_col is not None else 0
+            contrib_count = movies_col.count_documents({"submitted_by": {"$regex": f"^{uname}$", "$options": "i"}}) if movies_col is not None else 0
+
+            if idx == 1 and pts > 0:
+                badge = "🥇 Grand Cinephile"
+            elif idx == 2 and pts > 0:
+                badge = "🥈 Lead Critic"
+            elif idx == 3 and pts > 0:
+                badge = "🥉 Film Scout"
+            elif pts >= 10:
+                badge = "⭐ Verified Curator"
+            elif pts > 0:
+                badge = "🎬 Active Contributor"
+            else:
+                badge = "🌱 Rising Member"
+
+            leaderboard.append({
+                "rank": idx,
+                "username": uname,
+                "points": pts,
+                "reviews_count": rev_count,
+                "contributions_count": contrib_count,
+                "badge": badge,
+                "created_at": u.get('created_at', '')
+            })
+
+        current_user = _get_current_user(request)
+        my_standing = None
+        if current_user and not current_user.get('is_staff'):
+            current_uname = current_user['username'].lower()
+            for item in leaderboard:
+                if item['username'].lower() == current_uname:
+                    my_standing = item
+                    break
+
+        return JsonResponse({
+            "success": True,
+            "leaderboard": leaderboard,
+            "my_standing": my_standing
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
 

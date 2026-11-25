@@ -3,9 +3,11 @@ import {
   Film, Search, Bookmark, Star, Heart, Check, 
   X, User, LogIn, LogOut, Info, Sparkles, Filter,
   PlusCircle, Trash2, Shield, Image, Pencil, Lock, Play,
-  Users, MessageSquare, ArrowUpDown
+  Users, MessageSquare, ArrowUpDown,
+  ThumbsUp, Trophy, UploadCloud, Award
 } from 'lucide-react';
 import './App.css';
+import logoImg from './assets/logo.png';
 
 let rawEnvUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
 if (rawEnvUrl && !rawEnvUrl.endsWith('/api')) {
@@ -109,6 +111,20 @@ export default function App() {
   const [isEditingMyReview, setIsEditingMyReview] = useState(false);
   const [isPlayingVideo, setIsPlayingVideo] = useState(false);
   const [theaterMovie, setTheaterMovie] = useState(null); // Dedicated Fullscreen Cinema Theater Modal
+  const [likingReviewId, setLikingReviewId] = useState(null);
+
+  // Community Movie Contribution Modal State (+10 pts)
+  const [showContributeModal, setShowContributeModal] = useState(false);
+  const [contributeForm, setContributeForm] = useState({
+    title: '',
+    release_year: 2024,
+    genres: ['Action'],
+    synopsis: '',
+    poster_url: '',
+    video_url: ''
+  });
+  const [submittingContribute, setSubmittingContribute] = useState(false);
+  const [contributeMsg, setContributeMsg] = useState({ type: '', text: '' });
 
   // AI Matchmaker Modal State
   const [showAiModal, setShowAiModal] = useState(false);
@@ -119,14 +135,31 @@ export default function App() {
 
   // Django Admin Portal Modal State
   const [showAdminPortal, setShowAdminPortal] = useState(false);
-  const [adminPortalTab, setAdminPortalTab] = useState('users'); // 'users' | 'reviews'
-  const [adminStats, setAdminStats] = useState({ total_users: 0, total_movies: 0, total_reviews: 0, total_watchlists: 0, avg_rating: 0 });
+  const [adminPortalTab, setAdminPortalTab] = useState('users'); // 'users' | 'reviews' | 'submissions'
+  const [adminStats, setAdminStats] = useState({
+    total_users: 0,
+    total_movies: 0,
+    total_reviews: 0,
+    total_watchlists: 0,
+    avg_rating: 0,
+    pending_submissions: 0,
+    total_submissions: 0,
+    total_community_points: 0
+  });
   const [adminUsers, setAdminUsers] = useState([]);
   const [adminReviews, setAdminReviews] = useState([]);
+  const [adminSubmissions, setAdminSubmissions] = useState([]);
+  const [editingSubmission, setEditingSubmission] = useState(null);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminActionLoading, setAdminActionLoading] = useState(false);
   const [adminPortalError, setAdminPortalError] = useState('');
   const [adminSuccessMsg, setAdminSuccessMsg] = useState('');
+
+  // Community Leaderboard State
+  const [showLeaderboardModal, setShowLeaderboardModal] = useState(false);
+  const [leaderboardData, setLeaderboardData] = useState([]);
+  const [myStanding, setMyStanding] = useState(null);
+  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
 
   // Check system status & auto-detect Django port (8080 or 8000)
   const checkStatus = async () => {
@@ -315,6 +348,9 @@ export default function App() {
         if (movieData.success) {
           setSelectedMovie(movieData.movie);
         }
+        if (data.user_points !== undefined) {
+          setCurrentUser(prev => prev ? { ...prev, points: data.user_points } : prev);
+        }
         setIsEditingMyReview(false);
         setReviewForm({ rating: 5, comment: '' });
         fetchMovies(); // Refresh catalog ratings
@@ -354,6 +390,123 @@ export default function App() {
       }
     } catch (err) {
       console.error('Delete review error:', err);
+    }
+  };
+
+  // Toggle Like on Review (+1 pt)
+  const handleToggleReviewLike = async (reviewId) => {
+    if (!currentUser) {
+      setAuthMode('login');
+      setShowAuthModal(true);
+      return;
+    }
+    setLikingReviewId(reviewId);
+
+    const username = currentUser.username;
+
+    // Optimistic UI update: instantly toggle like icon and counter
+    setSelectedMovie(prev => {
+      if (!prev || !prev.reviews) return prev;
+      return {
+        ...prev,
+        reviews: prev.reviews.map(r => {
+          if (String(r.id) === String(reviewId)) {
+            const currentLikedBy = Array.isArray(r.liked_by) ? r.liked_by : [];
+            const currentlyLiked = currentLikedBy.some(u => u.toLowerCase() === username.toLowerCase());
+            const newLikedBy = currentlyLiked
+              ? currentLikedBy.filter(u => u.toLowerCase() !== username.toLowerCase())
+              : [...currentLikedBy, username];
+            const newCount = currentlyLiked ? Math.max(0, (r.likes_count || 1) - 1) : (r.likes_count || 0) + 1;
+            return {
+              ...r,
+              likes_count: newCount,
+              liked_by: newLikedBy
+            };
+          }
+          return r;
+        })
+      };
+    });
+
+    try {
+      const res = await fetch(`${apiBase}/reviews/${reviewId}/like/?username=${encodeURIComponent(username)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username: username })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSelectedMovie(prev => {
+          if (!prev || !prev.reviews) return prev;
+          return {
+            ...prev,
+            reviews: prev.reviews.map(r => {
+              if (String(r.id) === String(reviewId) || (data.review_id && String(r.id) === String(data.review_id))) {
+                return {
+                  ...r,
+                  likes_count: data.likes_count,
+                  liked_by: data.liked_by || (data.has_liked ? [username] : [])
+                };
+              }
+              return r;
+            })
+          };
+        });
+        if (data.user_points !== undefined) {
+          setCurrentUser(prev => prev ? { ...prev, points: data.user_points } : prev);
+        }
+      }
+    } catch (err) {
+      console.error('Error toggling review like:', err);
+    } finally {
+      setLikingReviewId(null);
+    }
+  };
+
+  // Community Movie Contribution Handlers
+  const toggleContributeGenre = (g) => {
+    setContributeForm(prev => {
+      const exists = prev.genres?.includes(g);
+      const updated = exists ? prev.genres.filter(item => item !== g) : [...(prev.genres || []), g];
+      return { ...prev, genres: updated.length ? updated : ['Action'] };
+    });
+  };
+
+  const handleContributeSubmit = async (e) => {
+    e.preventDefault();
+    if (!currentUser) {
+      setAuthMode('login');
+      setShowAuthModal(true);
+      return;
+    }
+    setSubmittingContribute(true);
+    setContributeMsg({ type: '', text: '' });
+    try {
+      const res = await fetch(`${apiBase}/contribute/movie/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(contributeForm)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setContributeMsg({ type: 'success', text: data.message });
+        setContributeForm({
+          title: '',
+          release_year: 2024,
+          genres: ['Action'],
+          synopsis: '',
+          poster_url: '',
+          video_url: ''
+        });
+      } else {
+        setContributeMsg({ type: 'error', text: data.error || 'Failed to submit movie.' });
+      }
+    } catch {
+      setContributeMsg({ type: 'error', text: 'Network error submitting movie.' });
+    } finally {
+      setSubmittingContribute(false);
     }
   };
 
@@ -528,18 +681,21 @@ export default function App() {
     setAdminLoading(true);
     try {
       const qs = currentUser ? `?admin_username=${encodeURIComponent(currentUser.username)}` : '';
-      const [statsRes, usersRes, reviewsRes] = await Promise.all([
+      const [statsRes, usersRes, reviewsRes, subsRes] = await Promise.all([
         fetch(`${apiBase}/admin-panel/stats/${qs}`, { credentials: 'include' }),
         fetch(`${apiBase}/admin-panel/users/${qs}`, { credentials: 'include' }),
-        fetch(`${apiBase}/admin-panel/reviews/${qs}`, { credentials: 'include' })
+        fetch(`${apiBase}/admin-panel/reviews/${qs}`, { credentials: 'include' }),
+        fetch(`${apiBase}/admin-panel/submissions/${qs}`, { credentials: 'include' })
       ]);
       const statsData = await statsRes.json();
       const usersData = await usersRes.json();
       const reviewsData = await reviewsRes.json();
+      const subsData = await subsRes.json();
 
       if (statsData.success) setAdminStats(statsData.stats);
       if (usersData.success) setAdminUsers(usersData.users);
       if (reviewsData.success) setAdminReviews(reviewsData.reviews);
+      if (subsData.success) setAdminSubmissions(subsData.submissions);
     } catch (err) {
       console.error('Error fetching admin data:', err);
       setAdminPortalError('Unable to load admin data from server.');
@@ -622,6 +778,91 @@ export default function App() {
     }
   };
 
+  // Admin Accept Submission (+10 pts to contributor)
+  const handleAcceptSubmission = async (submission, overrideData = null) => {
+    setAdminActionLoading(true);
+    setAdminPortalError('');
+    setAdminSuccessMsg('');
+    try {
+      const adminUser = currentUser?.username || 'admin';
+      const payload = {
+        admin_username: adminUser,
+        ...(overrideData || submission)
+      };
+      const res = await fetch(`${apiBase}/admin-panel/submissions/${submission.id}/accept/?admin_username=${encodeURIComponent(adminUser)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminSuccessMsg(data.message);
+        setEditingSubmission(null);
+        await fetchAdminPortalData();
+        fetchMovies();
+      } else {
+        setAdminPortalError(data.error || 'Failed to accept submission.');
+      }
+    } catch {
+      setAdminPortalError('Server error while accepting submission.');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  // Admin Reject Submission
+  const handleRejectSubmission = async (submissionId) => {
+    if (!window.confirm('Are you sure you want to reject this film submission?')) return;
+    setAdminActionLoading(true);
+    setAdminPortalError('');
+    setAdminSuccessMsg('');
+    try {
+      const adminUser = currentUser?.username || 'admin';
+      const res = await fetch(`${apiBase}/admin-panel/submissions/${submissionId}/reject/?admin_username=${encodeURIComponent(adminUser)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ admin_username: adminUser })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminSuccessMsg(data.message);
+        setEditingSubmission(null);
+        await fetchAdminPortalData();
+      } else {
+        setAdminPortalError(data.error || 'Failed to reject submission.');
+      }
+    } catch {
+      setAdminPortalError('Server error while rejecting submission.');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  // Community Leaderboard Fetcher
+  const fetchLeaderboard = async () => {
+    setLoadingLeaderboard(true);
+    try {
+      const q = currentUser ? `?username=${encodeURIComponent(currentUser.username)}` : '';
+      const res = await fetch(`${apiBase}/leaderboard/${q}`);
+      const data = await res.json();
+      if (data.success) {
+        setLeaderboardData(data.leaderboard || []);
+        setMyStanding(data.my_standing || null);
+      }
+    } catch (err) {
+      console.error('Error fetching leaderboard:', err);
+    } finally {
+      setLoadingLeaderboard(false);
+    }
+  };
+
+  const openLeaderboard = () => {
+    setShowLeaderboardModal(true);
+    fetchLeaderboard();
+  };
+
   // Handle Auth submit
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -686,7 +927,7 @@ export default function App() {
       {/* NAVBAR */}
       <header className="navbar">
         <div className="brand-section" onClick={() => setCurrentView('explore')}>
-          <img src="/logo.png" alt="CineMatch" className="brand-logo-img" />
+          <img src={logoImg} alt="CineMatch" className="brand-logo-img" />
         </div>
 
         {/* SEARCH BAR (Live Async Engine) */}
@@ -716,28 +957,63 @@ export default function App() {
             <span>AI Matchmaker</span>
           </button>
 
+          {/* Contribute Movie Button (Only for community members & guests; hidden for admin) */}
+          {!currentUser?.is_staff && (
+            <button 
+              className="contribute-nav-btn"
+              onClick={() => {
+                if (!currentUser) {
+                  setAuthMode('login');
+                  setShowAuthModal(true);
+                } else {
+                  setShowContributeModal(true);
+                  setContributeMsg({ type: '', text: '' });
+                }
+              }}
+              title="Contribute a Film to Catalog (+10 Points on Staff Approval)"
+            >
+              <UploadCloud size={15} />
+              <span>Contribute</span>
+            </button>
+          )}
+
           {/* Admin Controls (visible if user is staff) */}
           {currentUser?.is_staff && (
             <>
               <button 
                 className="admin-portal-nav-btn"
                 onClick={openAdminPortal}
-                title="Django Admin Control Center"
+                title="Catalog & Operations Control Center"
               >
                 <Shield size={16} />
-                <span>Admin Portal</span>
+                <span>Control Center</span>
+                {adminStats.pending_submissions > 0 && (
+                  <span className="admin-pending-dot" title={`${adminStats.pending_submissions} Pending Film Submissions`}>
+                    {adminStats.pending_submissions}
+                  </span>
+                )}
               </button>
 
               <button 
                 className="admin-add-btn"
                 onClick={() => setShowAddMovieModal(true)}
-                title="Add Movie"
+                title="Add Movie Directly to Catalog"
               >
                 <PlusCircle size={16} />
                 <span>Add Movie</span>
               </button>
             </>
           )}
+
+          {/* Community Leaderboard */}
+          <button 
+            className="nav-btn"
+            onClick={openLeaderboard}
+            title="Top Cinephile Contributors Leaderboard"
+          >
+            <Award size={15} />
+            <span>Leaderboard</span>
+          </button>
 
           {/* Watchlist Toggle Button */}
           <button 
@@ -749,13 +1025,30 @@ export default function App() {
             <span className="badge-count">{watchlistIds.length}</span>
           </button>
 
-          {/* User Auth */}
+          {/* User Auth & Points Display */}
           {currentUser ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                {currentUser.username}
-              </span>
-              <button className="nav-btn" onClick={handleLogout} title="Logout">
+            <div className="user-profile-nav">
+              <span className="user-profile-name">{currentUser.username}</span>
+
+              {/* Points badge for community users, Admin badge for staff */}
+              {currentUser.is_staff ? (
+                <span className="user-badge staff" title="Staff Administrator">
+                  <Shield size={12} />
+                  <span>Admin</span>
+                </span>
+              ) : (
+                <span 
+                  className="user-badge points"
+                  onClick={openLeaderboard}
+                  style={{ cursor: 'pointer' }}
+                  title="Your Community Reputation: +2 per review, +1 per like, +10 per accepted movie (Click to view Leaderboard)"
+                >
+                  <Trophy size={13} color="#cbd5e1" />
+                  <span>{currentUser.points || 0} pts</span>
+                </span>
+              )}
+
+              <button className="nav-btn logout-btn" onClick={handleLogout} title="Logout">
                 <LogOut size={15} />
               </button>
             </div>
@@ -1332,14 +1625,27 @@ export default function App() {
                             </div>
                           </div>
                           <p className="review-comment" style={{ margin: 0 }}>{myReview.comment}</p>
+                          <div className="review-footer-row" style={{ marginTop: '0.65rem' }}>
+                            <span className="review-likes-display" title="Likes received on your review">
+                              <ThumbsUp size={13} fill="currentColor" color="var(--accent-red)" />
+                              <span>{myReview.likes_count || 0} {myReview.likes_count === 1 ? 'Like' : 'Likes'}</span>
+                            </span>
+                          </div>
                         </div>
                       ) : (
                         /* User hasn't reviewed yet, or is editing their review */
                         <form className="write-review-card" onSubmit={handleSubmitReview}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                            <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>
-                              {isEditingMyReview ? 'Edit Your Review' : 'Rate this film'}
-                            </span>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '6px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                                {isEditingMyReview ? 'Edit Your Review' : 'Rate this film'}
+                              </span>
+                              {!isEditingMyReview && (
+                                <span className="review-reward-hint" title="Earn +2 community points for submitting a review">
+                                  <Trophy size={11} color="#cbd5e1" /> +2 pts
+                                </span>
+                              )}
+                            </div>
                             <div className="star-rating-select">
                               {[1, 2, 3, 4, 5].map((star) => (
                                 <button
@@ -1378,7 +1684,7 @@ export default function App() {
                               className="submit-review-btn"
                               disabled={submittingReview}
                             >
-                              {submittingReview ? 'Saving...' : (isEditingMyReview ? 'Update Review' : 'Submit Review')}
+                              {submittingReview ? 'Saving...' : (isEditingMyReview ? 'Update Review' : 'Submit Review (+2 pts)')}
                             </button>
                           </div>
                         </form>
@@ -1393,29 +1699,56 @@ export default function App() {
                             </p>
                           )
                         ) : (
-                          otherReviews.map((r, i) => (
-                            <div key={r.id || i} className="review-item">
-                              <div className="review-header">
-                                <span className="review-author">{r.username}</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                  <span style={{ color: 'var(--accent-gold)', display: 'flex', alignItems: 'center', gap: '3px', fontWeight: 600 }}>
-                                    <Star size={13} fill="currentColor" /> {r.rating}/5
-                                  </span>
-                                  <span className="review-date">{r.updated_at ? `Edited ${r.updated_at}` : r.created_at}</span>
-                                  {(currentUser?.is_staff || (currentUser && currentUser.username.toLowerCase() === r.username.toLowerCase())) && (
-                                    <button 
-                                      className="review-delete-btn"
-                                      title="Delete this review"
-                                      onClick={() => handleDeleteReview(r.id)}
-                                    >
-                                      <Trash2 size={13} />
-                                    </button>
-                                  )}
+                          otherReviews.map((r, i) => {
+                            const isLikedByMe = r.liked_by?.some(u => u.toLowerCase() === currentUser?.username?.toLowerCase());
+                            return (
+                              <div key={r.id || i} className="review-item">
+                                <div className="review-header">
+                                  <div className="review-author-wrap">
+                                    <span className="review-author">{r.username}</span>
+                                    {r.user_is_staff ? (
+                                      <span className="reviewer-tag staff" title="Staff Administrator">
+                                        <Shield size={10} /> Staff
+                                      </span>
+                                    ) : r.user_points > 0 ? (
+                                      <span className="reviewer-tag points" title={`${r.user_points} Community Points`}>
+                                        <Trophy size={10} color="#cbd5e1" /> {r.user_points} pts
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <span style={{ color: 'var(--accent-gold)', display: 'flex', alignItems: 'center', gap: '3px', fontWeight: 600 }}>
+                                      <Star size={13} fill="currentColor" /> {r.rating}/5
+                                    </span>
+                                    <span className="review-date">{r.updated_at ? `Edited ${r.updated_at}` : r.created_at}</span>
+                                    {(currentUser?.is_staff || (currentUser && currentUser.username.toLowerCase() === r.username.toLowerCase())) && (
+                                      <button 
+                                        className="review-delete-btn"
+                                        title="Delete this review"
+                                        onClick={() => handleDeleteReview(r.id)}
+                                      >
+                                        <Trash2 size={13} />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                                <p className="review-comment">{r.comment}</p>
+                                <div className="review-footer-row">
+                                  <button
+                                    type="button"
+                                    className={`review-like-btn ${isLikedByMe ? 'liked' : ''}`}
+                                    onClick={() => handleToggleReviewLike(r.id)}
+                                    disabled={likingReviewId === r.id}
+                                    title={currentUser ? (isLikedByMe ? "Unlike this review" : "Like this review (+1 Community Point)") : "Sign in to like reviews & earn points"}
+                                  >
+                                    <ThumbsUp size={13} fill={isLikedByMe ? "currentColor" : "none"} />
+                                    <span>{r.likes_count || 0}</span>
+                                    <span className="like-label">{r.likes_count === 1 ? 'Like' : 'Likes'}</span>
+                                  </button>
                                 </div>
                               </div>
-                              <p className="review-comment">{r.comment}</p>
-                            </div>
-                          ))
+                            );
+                          })
                         )}
                       </div>
                     </>
@@ -1823,6 +2156,134 @@ export default function App() {
         </div>
       )}
 
+      {/* COMMUNITY MOVIE CONTRIBUTION MODAL */}
+      {showContributeModal && (
+        <div className="modal-overlay" onClick={() => setShowContributeModal(false)}>
+          <div className="modal-card auth-modal-card" style={{ maxWidth: '620px' }} onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close-btn" onClick={() => setShowContributeModal(false)}>
+              <X size={18} />
+            </button>
+
+            <div className="contribute-modal-header">
+              <div className="contribute-badge">
+                <Trophy size={13} color="#cbd5e1" />
+                <span>Community Contribution • Earn +10 Points</span>
+              </div>
+              <h2 className="contribute-modal-title">Contribute a Film to CineMatch</h2>
+              <p className="contribute-modal-desc">
+                Know a great movie not yet in our catalog? Submit its details below. Once reviewed and accepted by staff (even if tweaked), you'll earn <strong>+10 community points</strong>!
+              </p>
+            </div>
+
+            {contributeMsg.text && (
+              <div className={`admin-portal-alert ${contributeMsg.type === 'success' ? 'success' : 'error'}`}>
+                {contributeMsg.text}
+              </div>
+            )}
+
+            <form className="auth-form" onSubmit={handleContributeSubmit}>
+              <div className="form-group">
+                <label className="form-label">Movie Title *</label>
+                <input 
+                  type="text" 
+                  className="form-input" 
+                  required
+                  placeholder="e.g. Inception, Tumbbad, Interstellar"
+                  value={contributeForm.title}
+                  onChange={(e) => setContributeForm({ ...contributeForm, title: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Release Year *</label>
+                <input 
+                  type="number" 
+                  className="form-input" 
+                  required
+                  min="1900"
+                  max="2030"
+                  value={contributeForm.release_year}
+                  onChange={(e) => setContributeForm({ ...contributeForm, release_year: parseInt(e.target.value) || 2024 })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Genres (Select multiple)</label>
+                <div className="genre-selector-chips">
+                  {GENRES.filter(g => g !== 'All').map(g => (
+                    <button
+                      key={g}
+                      type="button"
+                      className={`genre-chip ${contributeForm.genres?.includes(g) ? 'selected' : ''}`}
+                      onClick={() => toggleContributeGenre(g)}
+                    >
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Poster Image URL (Optional)</label>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                  <input 
+                    type="url" 
+                    className="form-input" 
+                    style={{ flex: 1 }}
+                    placeholder="https://example.com/poster.jpg"
+                    value={contributeForm.poster_url}
+                    onChange={(e) => setContributeForm({ ...contributeForm, poster_url: e.target.value })}
+                  />
+                  {contributeForm.poster_url && (
+                    <img 
+                      src={contributeForm.poster_url} 
+                      alt="Preview" 
+                      className="poster-preview-box" 
+                      onError={(e) => e.target.style.display = 'none'}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Play size={13} fill="currentColor" color="var(--accent-red)" />
+                  YouTube Movie / Trailer Link (Optional)
+                </label>
+                <input 
+                  type="url" 
+                  className="form-input" 
+                  placeholder="https://www.youtube.com/watch?v=..."
+                  value={contributeForm.video_url}
+                  onChange={(e) => setContributeForm({ ...contributeForm, video_url: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Synopsis / Storyline *</label>
+                <textarea
+                  className="review-textarea"
+                  style={{ minHeight: '90px' }}
+                  required
+                  placeholder="Tell what the movie is about..."
+                  value={contributeForm.synopsis}
+                  onChange={(e) => setContributeForm({ ...contributeForm, synopsis: e.target.value })}
+                />
+              </div>
+
+              <button 
+                type="submit" 
+                className="auth-submit-btn" 
+                disabled={submittingContribute}
+                style={{ background: 'linear-gradient(135deg, #f59e0b, #d97706)' }}
+              >
+                {submittingContribute ? 'Submitting to Staff...' : 'Submit Film for Review (+10 Pts)'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* DJANGO ADMIN PORTAL MODAL */}
       {showAdminPortal && (
         <div className="modal-overlay" onClick={() => setShowAdminPortal(false)}>
@@ -1835,11 +2296,11 @@ export default function App() {
             <div className="admin-portal-header">
               <div className="admin-portal-badge">
                 <Shield size={14} />
-                <span>Django Staff Control Center</span>
+                <span>CINEMATCH STUDIO & OPERATIONS</span>
               </div>
-              <h2 className="admin-portal-title">Admin Management Portal</h2>
+              <h2 className="admin-portal-title">Platform Control Center</h2>
               <p className="admin-portal-subtitle">
-                Manage registered user accounts, permissions, and moderate community reviews directly from Django.
+                Manage member accounts, curate community film submissions, and moderate platform reviews.
               </p>
             </div>
 
@@ -1857,28 +2318,35 @@ export default function App() {
                 <div className="admin-stat-icon users"><Users size={20} /></div>
                 <div className="admin-stat-info">
                   <span className="admin-stat-number">{adminStats.total_users}</span>
-                  <span className="admin-stat-label">Registered Users</span>
+                  <span className="admin-stat-label">Registered Members</span>
                 </div>
               </div>
               <div className="admin-stat-card">
                 <div className="admin-stat-icon movies"><Film size={20} /></div>
                 <div className="admin-stat-info">
                   <span className="admin-stat-number">{adminStats.total_movies}</span>
-                  <span className="admin-stat-label">Total Movies</span>
+                  <span className="admin-stat-label">Catalog Titles</span>
                 </div>
               </div>
               <div className="admin-stat-card">
                 <div className="admin-stat-icon reviews"><MessageSquare size={20} /></div>
                 <div className="admin-stat-info">
                   <span className="admin-stat-number">{adminStats.total_reviews}</span>
-                  <span className="admin-stat-label">User Reviews</span>
+                  <span className="admin-stat-label">Community Reviews</span>
                 </div>
               </div>
               <div className="admin-stat-card">
                 <div className="admin-stat-icon rating"><Star size={20} /></div>
                 <div className="admin-stat-info">
                   <span className="admin-stat-number">{adminStats.avg_rating > 0 ? adminStats.avg_rating : '4.8'}</span>
-                  <span className="admin-stat-label">Avg Rating</span>
+                  <span className="admin-stat-label">Platform Score</span>
+                </div>
+              </div>
+              <div className="admin-stat-card">
+                <div className="admin-stat-icon points"><Trophy size={20} /></div>
+                <div className="admin-stat-info">
+                  <span className="admin-stat-number">{adminStats.total_community_points || 0}</span>
+                  <span className="admin-stat-label">Reputation Points</span>
                 </div>
               </div>
             </div>
@@ -1887,19 +2355,29 @@ export default function App() {
             <div className="admin-tabs-nav">
               <button 
                 className={`admin-tab-btn ${adminPortalTab === 'users' ? 'active' : ''}`}
-                onClick={() => { setAdminPortalTab('users'); setAdminPortalError(''); setAdminSuccessMsg(''); }}
+                onClick={() => { setAdminPortalTab('users'); setAdminPortalError(''); setAdminSuccessMsg(''); setEditingSubmission(null); }}
               >
                 <Users size={16} />
-                <span>User Accounts</span>
+                <span>Member Accounts</span>
                 <span className="admin-tab-count">{adminUsers.length}</span>
               </button>
               <button 
                 className={`admin-tab-btn ${adminPortalTab === 'reviews' ? 'active' : ''}`}
-                onClick={() => { setAdminPortalTab('reviews'); setAdminPortalError(''); setAdminSuccessMsg(''); }}
+                onClick={() => { setAdminPortalTab('reviews'); setAdminPortalError(''); setAdminSuccessMsg(''); setEditingSubmission(null); }}
               >
                 <MessageSquare size={16} />
                 <span>Review Moderation</span>
                 <span className="admin-tab-count">{adminReviews.length}</span>
+              </button>
+              <button 
+                className={`admin-tab-btn ${adminPortalTab === 'submissions' ? 'active' : ''}`}
+                onClick={() => { setAdminPortalTab('submissions'); setAdminPortalError(''); setAdminSuccessMsg(''); setEditingSubmission(null); }}
+              >
+                <UploadCloud size={16} />
+                <span>Film Submissions</span>
+                <span className={`admin-tab-count ${adminSubmissions.filter(s => s.status === 'pending').length > 0 ? 'highlight' : ''}`}>
+                  {adminSubmissions.filter(s => s.status === 'pending').length}
+                </span>
               </button>
             </div>
 
@@ -1907,7 +2385,7 @@ export default function App() {
             {adminLoading ? (
               <div className="admin-loading-state">
                 <div className="ai-spinner"></div>
-                <span>Loading admin data from Django...</span>
+                <span>Synchronizing platform records...</span>
               </div>
             ) : adminPortalTab === 'users' ? (
               <div className="admin-users-list">
@@ -1928,6 +2406,11 @@ export default function App() {
                               <span className="admin-role-badge staff">👑 Admin</span>
                             ) : (
                               <span className="admin-role-badge member">👤 Member</span>
+                            )}
+                            {!u.is_staff && (
+                              <span className="admin-points-pill" title="Community Points">
+                                <Trophy size={11} color="#cbd5e1" /> {u.points || 0} pts
+                              </span>
                             )}
                             {isSelf && <span className="admin-role-badge self">You</span>}
                           </div>
@@ -1965,7 +2448,7 @@ export default function App() {
                   })
                 )}
               </div>
-            ) : (
+            ) : adminPortalTab === 'reviews' ? (
               /* Content: Reviews Moderation Tab */
               <div className="admin-reviews-list">
                 {adminReviews.length === 0 ? (
@@ -1997,6 +2480,328 @@ export default function App() {
                   ))
                 )}
               </div>
+            ) : (
+              /* Content: Movie Submissions Tab */
+              <div className="admin-submissions-list">
+                {adminSubmissions.length === 0 ? (
+                  <div className="admin-empty-state">No movie submissions received yet.</div>
+                ) : (
+                  adminSubmissions.map(s => {
+                    const isEditingThis = editingSubmission?.id === s.id;
+                    return (
+                      <div key={s.id} className={`admin-submission-card ${s.status}`}>
+                        {isEditingThis ? (
+                          <div className="admin-submission-edit-form">
+                            <h4 style={{ margin: '0 0 0.75rem 0', color: '#60a5fa', fontSize: '1rem' }}>
+                              Tweak & Accept Movie (+10 pts to {s.submitted_by})
+                            </h4>
+                            <div className="admin-sub-edit-grid">
+                              <div className="form-group">
+                                <label className="form-label">Title</label>
+                                <input
+                                  type="text"
+                                  className="form-input"
+                                  value={editingSubmission.title}
+                                  onChange={(e) => setEditingSubmission({ ...editingSubmission, title: e.target.value })}
+                                />
+                              </div>
+                              <div className="form-group">
+                                <label className="form-label">Release Year</label>
+                                <input
+                                  type="number"
+                                  className="form-input"
+                                  value={editingSubmission.release_year}
+                                  onChange={(e) => setEditingSubmission({ ...editingSubmission, release_year: parseInt(e.target.value) || 2024 })}
+                                />
+                              </div>
+                            </div>
+                            <div className="form-group">
+                              <label className="form-label">Poster URL</label>
+                              <input
+                                type="url"
+                                className="form-input"
+                                value={editingSubmission.poster_url || ''}
+                                onChange={(e) => setEditingSubmission({ ...editingSubmission, poster_url: e.target.value })}
+                              />
+                            </div>
+                            <div className="form-group">
+                              <label className="form-label">YouTube Video URL</label>
+                              <input
+                                type="url"
+                                className="form-input"
+                                value={editingSubmission.video_url || ''}
+                                onChange={(e) => setEditingSubmission({ ...editingSubmission, video_url: e.target.value })}
+                              />
+                            </div>
+                            <div className="form-group">
+                              <label className="form-label">Synopsis</label>
+                              <textarea
+                                className="review-textarea"
+                                style={{ minHeight: '80px' }}
+                                value={editingSubmission.synopsis}
+                                onChange={(e) => setEditingSubmission({ ...editingSubmission, synopsis: e.target.value })}
+                              />
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.75rem' }}>
+                              <button
+                                type="button"
+                                className="admin-action-btn accept"
+                                onClick={() => handleAcceptSubmission(s, editingSubmission)}
+                                disabled={adminActionLoading}
+                              >
+                                <Check size={14} /> Save & Accept (+10 Pts)
+                              </button>
+                              <button
+                                type="button"
+                                className="admin-action-btn"
+                                onClick={() => setEditingSubmission(null)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="admin-submission-view">
+                            <div className="admin-sub-poster-col">
+                              <img
+                                src={s.poster_url || SAMPLE_POSTERS[0]}
+                                alt={s.title}
+                                className="admin-sub-poster"
+                                onError={(e) => e.target.src = SAMPLE_POSTERS[0]}
+                              />
+                            </div>
+                            <div className="admin-sub-content-col">
+                              <div className="admin-sub-top-bar">
+                                <div className="admin-sub-title-row">
+                                  <h3 className="admin-sub-title">{s.title} <span className="admin-sub-year">({s.release_year})</span></h3>
+                                  <span className={`admin-sub-status-badge ${s.status}`}>
+                                    {s.status === 'pending' ? '⏳ Pending Review' : s.status === 'approved' ? '✓ Approved' : '✕ Rejected'}
+                                  </span>
+                                </div>
+                                <div className="admin-sub-meta">
+                                  <span>Submitted by <strong>@{s.submitted_by}</strong> on {s.created_at}</span>
+                                </div>
+                              </div>
+
+                              <div className="admin-sub-genre-chips">
+                                {Array.isArray(s.genres) && s.genres.map(g => (
+                                  <span key={g} className="modal-genre-tag" style={{ fontSize: '0.75rem', padding: '0.15rem 0.45rem' }}>{g}</span>
+                                ))}
+                              </div>
+
+                              <p className="admin-sub-synopsis">{s.synopsis}</p>
+
+                              {s.video_url && (
+                                <div className="admin-sub-video-link">
+                                  <Play size={12} fill="currentColor" color="var(--accent-red)" />
+                                  <a href={s.video_url} target="_blank" rel="noopener noreferrer">
+                                    {s.video_url}
+                                  </a>
+                                </div>
+                              )}
+
+                              {s.status === 'pending' && (
+                                <div className="admin-sub-actions-row">
+                                  <button
+                                    type="button"
+                                    className="admin-action-btn accept"
+                                    onClick={() => handleAcceptSubmission(s)}
+                                    disabled={adminActionLoading}
+                                    title="Accept movie and award +10 points to contributor"
+                                  >
+                                    <Check size={14} /> Accept & Publish (+10 Pts)
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="admin-action-btn edit-sub"
+                                    onClick={() => setEditingSubmission({ ...s })}
+                                    disabled={adminActionLoading}
+                                    title="Edit details before publishing"
+                                  >
+                                    <Pencil size={13} /> Edit & Accept
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="admin-action-btn delete"
+                                    onClick={() => handleRejectSubmission(s.id)}
+                                    disabled={adminActionLoading}
+                                    title="Reject submission"
+                                  >
+                                    <X size={14} /> Reject
+                                  </button>
+                                </div>
+                              )}
+
+                              {s.status === 'approved' && (
+                                <div className="admin-sub-result approved">
+                                  <Check size={14} /> Published to live catalog • +10 points awarded to @{s.submitted_by}
+                                </div>
+                              )}
+                              {s.status === 'rejected' && (
+                                <div className="admin-sub-result rejected">
+                                  <X size={14} /> Submission rejected
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* COMMUNITY LEADERBOARD MODAL */}
+      {showLeaderboardModal && (
+        <div className="modal-overlay" onClick={() => setShowLeaderboardModal(false)}>
+          <div className="modal-card leaderboard-modal" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="modal-close-btn"
+              onClick={() => setShowLeaderboardModal(false)}
+              aria-label="Close"
+            >
+              <X size={18} />
+            </button>
+
+            <div className="leaderboard-header">
+              <div className="leaderboard-badge">
+                <Award size={14} />
+                <span>Community Hall of Fame</span>
+              </div>
+              <h2 className="leaderboard-title">Top Cinephile Contributors</h2>
+              <p className="leaderboard-desc">
+                Recognizing members who share insightful film reviews and expand the CineMatch cinema catalog.
+              </p>
+            </div>
+
+            {loadingLeaderboard ? (
+              <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-dim)' }}>
+                <p>Loading community rankings...</p>
+              </div>
+            ) : leaderboardData.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-dim)' }}>
+                <Trophy size={40} style={{ opacity: 0.3, marginBottom: '0.75rem' }} />
+                <p>No community contributors yet. Be the first to review or submit a movie!</p>
+              </div>
+            ) : (
+              <>
+                {/* Top 3 Podium (shown if at least 2 contributors exist) */}
+                {leaderboardData.length >= 2 && (
+                  <div className="leaderboard-podium">
+                    {/* Rank 2 - Silver */}
+                    <div className="podium-card second">
+                      <div className="podium-medal">🥈</div>
+                      <div className="podium-username" title={leaderboardData[1].username}>
+                        @{leaderboardData[1].username}
+                      </div>
+                      <div className="podium-points">
+                        <Trophy size={11} /> {leaderboardData[1].points} pts
+                      </div>
+                      <div className="podium-meta">
+                        <span>{leaderboardData[1].reviews_count} reviews</span>
+                        {leaderboardData[1].contributions_count > 0 && (
+                          <span>• {leaderboardData[1].contributions_count} films</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Rank 1 - Gold */}
+                    <div className="podium-card first">
+                      <div className="podium-medal">🥇</div>
+                      <div className="podium-username" title={leaderboardData[0].username}>
+                        @{leaderboardData[0].username}
+                      </div>
+                      <div className="podium-points">
+                        <Trophy size={12} /> {leaderboardData[0].points} pts
+                      </div>
+                      <div className="podium-meta">
+                        <span>{leaderboardData[0].reviews_count} reviews</span>
+                        {leaderboardData[0].contributions_count > 0 && (
+                          <span>• {leaderboardData[0].contributions_count} films</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Rank 3 - Bronze */}
+                    {leaderboardData[2] ? (
+                      <div className="podium-card third">
+                        <div className="podium-medal">🥉</div>
+                        <div className="podium-username" title={leaderboardData[2].username}>
+                          @{leaderboardData[2].username}
+                        </div>
+                        <div className="podium-points">
+                          <Trophy size={11} /> {leaderboardData[2].points} pts
+                        </div>
+                        <div className="podium-meta">
+                          <span>{leaderboardData[2].reviews_count} reviews</span>
+                          {leaderboardData[2].contributions_count > 0 && (
+                            <span>• {leaderboardData[2].contributions_count} films</span>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="podium-card third" style={{ opacity: 0.35 }}>
+                        <div className="podium-medal">🥉</div>
+                        <div className="podium-username">Open</div>
+                        <div className="podium-points">0 pts</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Full Contributor Rankings List */}
+                <div className="leaderboard-list">
+                  {leaderboardData.map((u) => {
+                    const isMe = currentUser && currentUser.username.toLowerCase() === u.username.toLowerCase();
+                    const rankClass = u.rank === 1 ? 'top-1' : u.rank === 2 ? 'top-2' : u.rank === 3 ? 'top-3' : '';
+                    return (
+                      <div
+                        key={u.username}
+                        className={`leaderboard-row ${isMe ? 'me' : ''}`}
+                      >
+                        <div className={`lb-rank ${rankClass}`}>
+                          {u.rank === 1 ? '🥇' : u.rank === 2 ? '🥈' : u.rank === 3 ? '🥉' : `#${u.rank}`}
+                        </div>
+                        <div className="lb-avatar">
+                          {u.username ? u.username.charAt(0).toUpperCase() : '?'}
+                        </div>
+                        <div className="lb-user-info">
+                          <div className="lb-username-row">
+                            <span className="lb-username">
+                              {u.username} {isMe && '(You)'}
+                            </span>
+                            <span className="lb-badge">{u.badge}</span>
+                          </div>
+                          <div className="lb-stats">
+                            {u.reviews_count} {u.reviews_count === 1 ? 'review' : 'reviews'}
+                            {u.contributions_count > 0 && ` • ${u.contributions_count} ${u.contributions_count === 1 ? 'film added' : 'films added'}`}
+                          </div>
+                        </div>
+                        <div className="lb-points-pill">
+                          <Trophy size={12} />
+                          <span>{u.points} pts</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Current User Standing Footer Strip */}
+                {currentUser && !currentUser.is_staff && (
+                  <div className="leaderboard-my-strip">
+                    <span>
+                      Your Standing: <strong>{myStanding ? `Rank #${myStanding.rank} • ${myStanding.badge}` : 'Unranked (Write reviews to earn points!)'}</strong>
+                    </span>
+                    <span>
+                      <strong>{currentUser.points ?? 0}</strong> points earned
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -2015,10 +2820,6 @@ export default function App() {
             {/* Theater Top Navigation Bar */}
             <div className="theater-header">
               <div className="theater-movie-info">
-                <div className="theater-badge">
-                  <Play size={12} fill="currentColor" />
-                  <span>Cinema Theater</span>
-                </div>
                 <h2 className="theater-title">{theaterMovie.title}</h2>
                 <span className="theater-year">({theaterMovie.release_year})</span>
                 {theaterMovie.global_rating > 0 && (

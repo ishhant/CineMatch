@@ -22,4 +22,10 @@ urlpatterns = [
     path('admin-panel/users/<str:user_id>/role/', views.api_admin_toggle_user_role, name='admin_toggle_role'),
     path('admin-panel/users/<str:user_id>/delete/', views.api_admin_delete_user, name='admin_delete_user'),
     path('admin-panel/reviews/', views.api_admin_recent_reviews, name='admin_recent_reviews'),
+    path('reviews/<str:review_id>/like/', views.api_toggle_review_like, name='api_toggle_review_like'),
+    path('contribute/movie/', views.api_contribute_movie, name='api_contribute_movie'),
+    path('admin-panel/submissions/', views.api_admin_submissions, name='admin_submissions'),
+    path('admin-panel/submissions/<str:submission_id>/accept/', views.api_admin_accept_submission, name='admin_accept_submission'),
+    path('admin-panel/submissions/<str:submission_id>/reject/', views.api_admin_reject_submission, name='admin_reject_submission'),
+    path('leaderboard/', views.api_leaderboard, name='api_leaderboard'),
 ]

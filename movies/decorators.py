@@ -8,15 +8,17 @@ def get_session_user(request):
     Retrieves authenticated user from session, JSON body, or query param,
     and validates their staff status against MongoDB Atlas.
     """
-    username = request.session.get('username')
+    username = None
+    if hasattr(request, 'session'):
+        username = request.session.get('username')
 
     # Fallback to query param or JSON payload for resilient cross-origin support
-    if not username and request.method == 'GET':
-        username = request.GET.get('admin_username')
-    elif not username and request.body:
+    if not username and hasattr(request, 'GET'):
+        username = request.GET.get('admin_username') or request.GET.get('username')
+    if not username and getattr(request, 'body', None):
         try:
             data = json.loads(request.body)
-            username = data.get('admin_username')
+            username = data.get('admin_username') or data.get('username')
         except Exception:
             pass
 
@@ -45,7 +47,7 @@ def admin_required(view_func):
     @wraps(view_func)
     def _wrapped_view(request, *args, **kwargs):
         # 1. Quick session check
-        if request.session.get('is_staff'):
+        if hasattr(request, 'session') and request.session.get('is_staff'):
             return view_func(request, *args, **kwargs)
 
         # 2. Database validation check
