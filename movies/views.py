@@ -573,8 +573,7 @@ def api_ai_match(request):
     """
     AI Movie Matchmaker endpoint:
     Analyzes user mood/preference and matches the best movie(s) from the catalog
-    using Google Gemini API (if GEMINI_API_KEY is configured) or an intelligent
-    built-in semantic NLP content matcher as a zero-failure fallback.
+    strictly using the Google Gemini 1.5 Flash API.
     """
     if request.method != 'POST':
         return JsonResponse({"error": "Method not allowed"}, status=405)
@@ -585,6 +584,12 @@ def api_ai_match(request):
         if not user_mood:
             return JsonResponse({"error": "Please describe your mood or what you want to watch."}, status=400)
 
+        gemini_api_key = os.getenv('GEMINI_API_KEY', '').strip()
+        if not gemini_api_key:
+            return JsonResponse({
+                "error": "GEMINI_API_KEY is not configured. Please add GEMINI_API_KEY to your .env file or Render dashboard."
+            }, status=500)
+
         col = get_collection('movies')
         if col is None:
             return JsonResponse({"error": "Database not connected"}, status=503)
@@ -593,126 +598,71 @@ def api_ai_match(request):
         if not movies:
             return JsonResponse({"error": "No movies available in the catalog yet."}, status=404)
 
-        # 1. Check for Gemini API key
-        gemini_api_key = os.getenv('GEMINI_API_KEY', '').strip()
-        matched_movie_ids = []
-        explanation = ""
-        engine_used = "nlp"
+        import urllib.request
+        import urllib.error
+        import json as json_lib
 
-        if gemini_api_key:
-            try:
-                import urllib.request
-                import json as json_lib
+        catalog_summary = []
+        for m in movies:
+            catalog_summary.append({
+                "id": str(m['id']),
+                "title": m['title'],
+                "genres": m.get('genres', []),
+                "synopsis": m.get('synopsis', ''),
+                "rating": m.get('global_rating', 0.0)
+            })
 
-                catalog_summary = []
-                for m in movies:
-                    catalog_summary.append({
-                        "id": m['id'],
-                        "title": m['title'],
-                        "genres": m.get('genres', []),
-                        "synopsis": m.get('synopsis', ''),
-                        "rating": m.get('global_rating', 0.0)
-                    })
+        system_prompt = (
+            "You are CineMatch AI, an expert cinematic recommendation engine. "
+            "Analyze the user's mood/craving and pick the 1-2 BEST matching movies strictly from the provided catalog. "
+            "Return ONLY valid JSON matching this exact schema: "
+            '{"matched_ids": ["<movie_id>"], "explanation": "<1-2 sentences personalized reasoning why this fits their vibe>"}'
+        )
 
-                system_prompt = (
-                    "You are CineMatch AI, an expert cinematic matchmaker. "
-                    "Analyze the user's mood and pick the 1-2 BEST matching movies strictly from the provided catalog. "
-                    "Return ONLY valid JSON matching this schema: "
-                    "{\"matched_ids\": [\"<movie_id>\"], \"explanation\": \"<1-2 sentences personalized reasoning why this fits their vibe>\"}"
-                )
-
-                gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_api_key}"
-                gemini_payload = {
-                    "contents": [{
-                        "parts": [{
-                            "text": f"{system_prompt}\n\nMovies Catalog:\n{json_lib.dumps(catalog_summary)}\n\nUser Mood / Craving:\n\"{user_mood}\""
-                        }]
-                    }],
-                    "generationConfig": {
-                        "response_mime_type": "application/json",
-                        "temperature": 0.3
-                    }
-                }
-
-                req = urllib.request.Request(
-                    gemini_url,
-                    data=json_lib.dumps(gemini_payload).encode('utf-8'),
-                    headers={'Content-Type': 'application/json'},
-                    method='POST'
-                )
-                with urllib.request.urlopen(req, timeout=7) as resp:
-                    resp_data = json_lib.loads(resp.read().decode('utf-8'))
-                    text_response = resp_data['candidates'][0]['content']['parts'][0]['text']
-                    ai_json = json_lib.loads(text_response)
-                    matched_movie_ids = ai_json.get('matched_ids', [])
-                    explanation = ai_json.get('explanation', '')
-                    if matched_movie_ids:
-                        engine_used = "gemini"
-            except Exception as gemini_err:
-                print("Gemini API call failed, falling back to NLP matcher:", gemini_err)
-
-        # 2. If Gemini was not used or failed, use our Smart Built-in Semantic NLP Matcher
-        if not matched_movie_ids:
-            engine_used = "nlp"
-            scored_movies = []
-            mood_lower = user_mood.lower()
-            import re
-            mood_words = set(re.findall(r'\b[a-zA-Z]{3,}\b', mood_lower))
-
-            # Thematic keywords synonym map
-            theme_map = {
-                "dark": ["dark", "grim", "mystery", "death", "tragedy", "loss", "grief", "murder", "detective", "shadow"],
-                "thriller": ["thriller", "suspense", "tension", "twists", "crime", "investigation", "police", "chase"],
-                "horror": ["horror", "scary", "fear", "creepy", "monster", "demon", "curse", "greed", "treasure", "tumbbad", "ghost", "eerie"],
-                "fantasy": ["fantasy", "magic", "spirit", "enchanted", "anime", "animated", "world", "whimsical", "spirited", "journey", "adventure"],
-                "family": ["family", "heartwarming", "feel-good", "kids", "child", "parents", "love", "gentle", "uplifting"],
-                "drama": ["drama", "revenge", "betrayal", "conflict", "politics", "war", "emotional", "serious", "haider", "hamlet", "tragedy"],
-                "action": ["action", "fight", "speed", "guns", "hero", "battle", "danger", "rush"]
+        gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_api_key}"
+        gemini_payload = {
+            "contents": [{
+                "parts": [{
+                    "text": f"{system_prompt}\n\nMovies Catalog:\n{json_lib.dumps(catalog_summary)}\n\nUser Mood / Craving:\n\"{user_mood}\""
+                }]
+            }],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.3
             }
+        }
 
-            for m in movies:
-                score = 0.0
-                text_corpus = f"{m.get('title', '')} {' '.join(m.get('genres', []))} {m.get('synopsis', '')}".lower()
+        req = urllib.request.Request(
+            gemini_url,
+            data=json_lib.dumps(gemini_payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
 
-                # Exact word matches
-                for word in mood_words:
-                    if word in text_corpus:
-                        score += 3.0
-                    # Check synonym themes
-                    for theme_key, synonyms in theme_map.items():
-                        if word in synonyms:
-                            if any(syn in text_corpus for syn in synonyms):
-                                score += 2.5
-                            if any(g.lower() == theme_key for g in m.get('genres', [])):
-                                score += 4.0
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                resp_data = json_lib.loads(resp.read().decode('utf-8'))
+                text_response = resp_data['candidates'][0]['content']['parts'][0]['text']
+                ai_json = json_lib.loads(text_response)
+                matched_movie_ids = [str(_id) for _id in ai_json.get('matched_ids', [])]
+                explanation = ai_json.get('explanation', '')
+        except urllib.error.HTTPError as http_err:
+            error_msg = http_err.read().decode('utf-8', errors='ignore')
+            return JsonResponse({
+                "error": f"Google Gemini API error ({http_err.code}): {error_msg}"
+            }, status=http_err.code)
+        except Exception as gemini_err:
+            return JsonResponse({
+                "error": f"Failed to connect to Google Gemini API: {str(gemini_err)}"
+            }, status=502)
 
-                # Slight bonus for higher rated movies
-                score += float(m.get('global_rating', 0.0)) * 0.4
-                scored_movies.append((m, score))
-
-            scored_movies.sort(key=lambda x: x[1], reverse=True)
-            top_movie = scored_movies[0][0] if scored_movies else movies[0]
-            matched_movie_ids = [top_movie['id']]
-
-            # Add second match if close score
-            if len(scored_movies) > 1 and scored_movies[1][1] > 2.0:
-                matched_movie_ids.append(scored_movies[1][0]['id'])
-
-            # Generate smart natural explanation
-            genres_str = ", ".join(top_movie.get('genres', []))
-            explanation = (
-                f"We analyzed our catalog for '{user_mood}' and found '{top_movie['title']}'. "
-                f"With its captivating {genres_str} themes, it delivers the exact atmosphere and emotional depth you're looking for."
-            )
-
-        # Retrieve full movie objects for the matched IDs
-        matched_movies = [m for m in movies if m['id'] in matched_movie_ids]
+        matched_movies = [m for m in movies if str(m['id']) in matched_movie_ids]
         if not matched_movies and movies:
             matched_movies = [movies[0]]
 
         return JsonResponse({
             "success": True,
-            "engine": engine_used,
+            "engine": "gemini",
             "mood": user_mood,
             "explanation": explanation,
             "matches": matched_movies

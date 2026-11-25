@@ -1552,7 +1552,7 @@ export default function App() {
                       AI Match Analysis
                     </span>
                     <span className="ai-engine-tag">
-                      {aiResult.engine === 'gemini' ? '⚡ Google Gemini 1.5' : '🧠 Semantic Content NLP'}
+                      ⚡ Powered by Google Gemini AI
                     </span>
                   </div>
                   <p className="ai-reasoning-text">"{aiResult.explanation}"</p>
