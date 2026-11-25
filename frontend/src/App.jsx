@@ -17,13 +17,11 @@ const ENV_API_URL = rawEnvUrl;
 
 const API_CANDIDATES = [
   ...(ENV_API_URL ? [ENV_API_URL] : []),
-  'http://127.0.0.1:8080/api',
-  'http://127.0.0.1:8000/api',
   'http://localhost:8080/api',
-  'http://localhost:8000/api'
+  'http://127.0.0.1:8080/api'
 ];
 
-let cachedApiBase = ENV_API_URL || 'http://127.0.0.1:8080/api';
+let cachedApiBase = ENV_API_URL || 'http://localhost:8080/api';
 
 const GENRES = ['All', 'Action', 'Sci-Fi', 'Drama', 'Crime', 'Animation', 'Thriller', 'Horror', 'Comedy'];
 
@@ -70,7 +68,14 @@ export default function App() {
 
   // System & Auth
   const [systemStatus, setSystemStatus] = useState({ connected: false, message: 'Checking...' });
-  const [currentUser, setCurrentUser] = useState(null);
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('cinematch_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
   const [authForm, setAuthForm] = useState({ username: '', password: '', email: '' });
@@ -165,16 +170,18 @@ export default function App() {
   const checkStatus = async () => {
     for (const candidate of API_CANDIDATES) {
       try {
-        const res = await fetch(`${candidate}/status/`, { signal: AbortSignal.timeout(1500) });
+        const res = await fetch(`${candidate}/status/`, { signal: AbortSignal.timeout(3000) });
         if (res.ok) {
           const data = await res.json();
-          cachedApiBase = candidate;
-          setApiBase(candidate);
-          setSystemStatus({
-            connected: data.mongodb_connected,
-            message: data.message
-          });
-          return candidate;
+          if (data && data.mongodb_connected !== undefined) {
+            cachedApiBase = candidate;
+            setApiBase(candidate);
+            setSystemStatus({
+              connected: Boolean(data.mongodb_connected),
+              message: data.message || 'Connected'
+            });
+            return candidate;
+          }
         }
       } catch {
         // try next port
@@ -187,13 +194,22 @@ export default function App() {
     return cachedApiBase;
   };
 
-  // Check current auth status
+  // Check current auth status with backend
   const checkAuth = async (base = apiBase) => {
     try {
-      const res = await fetch(`${base}/auth/status/`, { credentials: 'include' });
+      let savedUsername = '';
+      try {
+        const raw = localStorage.getItem('cinematch_user');
+        if (raw) savedUsername = JSON.parse(raw)?.username || '';
+      } catch {}
+
+      const q = savedUsername ? `?username=${encodeURIComponent(savedUsername)}` : '';
+      const res = await fetch(`${base}/auth/status/${q}`, { credentials: 'include' });
       const data = await res.json();
-      if (data.authenticated) {
+      if (data.authenticated && data.user) {
         setCurrentUser(data.user);
+      } else if (!data.authenticated && !savedUsername) {
+        setCurrentUser(null);
       }
     } catch {
       // Ignore
@@ -247,6 +263,19 @@ export default function App() {
 
   useEffect(() => {
     loadWatchlist(apiBase);
+  }, [currentUser]);
+
+  // Synchronize authenticated user to localStorage on change
+  useEffect(() => {
+    try {
+      if (currentUser) {
+        localStorage.setItem('cinematch_user', JSON.stringify(currentUser));
+      } else {
+        localStorage.removeItem('cinematch_user');
+      }
+    } catch {
+      // Ignore
+    }
   }, [currentUser]);
 
   useEffect(() => {
@@ -868,23 +897,56 @@ export default function App() {
     e.preventDefault();
     setAuthError('');
     const endpoint = authMode === 'login' ? 'login' : 'register';
+    const activeBase = apiBase || cachedApiBase || 'http://localhost:8080/api';
+
     try {
-      const res = await fetch(`${apiBase}/auth/${endpoint}/`, {
+      const res = await fetch(`${activeBase}/auth/${endpoint}/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(authForm)
       });
-      const data = await res.json();
-      if (data.success) {
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
         setCurrentUser(data.user);
+        try {
+          localStorage.setItem('cinematch_user', JSON.stringify(data.user));
+        } catch {}
         setShowAuthModal(false);
         setAuthForm({ username: '', password: '', email: '' });
       } else {
-        setAuthError(data.error || 'Authentication failed');
+        setAuthError(data?.error || (res.status === 401 ? 'Invalid username or password' : 'Authentication failed'));
       }
-    } catch {
-      setAuthError('Unable to connect to server. Please try again.');
+    } catch (err) {
+      console.error('Auth error:', err);
+      // Fallback try with alternative loopback address
+      try {
+        const altBase = activeBase.includes('localhost') ? 'http://127.0.0.1:8080/api' : 'http://localhost:8080/api';
+        const res2 = await fetch(`${altBase}/auth/${endpoint}/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(authForm)
+        });
+        const data2 = await res2.json().catch(() => null);
+        if (res2.ok && data2?.success) {
+          setApiBase(altBase);
+          cachedApiBase = altBase;
+          setCurrentUser(data2.user);
+          try {
+            localStorage.setItem('cinematch_user', JSON.stringify(data2.user));
+          } catch {}
+          setShowAuthModal(false);
+          setAuthForm({ username: '', password: '', email: '' });
+          return;
+        } else if (data2?.error) {
+          setAuthError(data2.error);
+          return;
+        }
+      } catch (err2) {
+        console.error('Auth fallback error:', err2);
+      }
+      setAuthError('Unable to connect to server. Please ensure Django is running on port 8080.');
     }
   };
 
@@ -894,9 +956,14 @@ export default function App() {
         method: 'POST',
         credentials: 'include'
       });
-      setCurrentUser(null);
     } catch (err) {
       console.error('Logout error:', err);
+    } finally {
+      setCurrentUser(null);
+      try {
+        localStorage.removeItem('cinematch_user');
+      } catch {}
+      setWatchlistIds([]);
     }
   };
 
@@ -1439,6 +1506,7 @@ export default function App() {
                       src={newMovieForm.poster_url} 
                       alt="Preview" 
                       className="poster-preview-box" 
+                      onLoad={(e) => e.target.style.display = 'block'}
                       onError={(e) => e.target.style.display = 'none'}
                     />
                   )}
@@ -1831,6 +1899,7 @@ export default function App() {
                       src={editingMovieForm.poster_url} 
                       alt="Preview" 
                       className="poster-preview-box" 
+                      onLoad={(e) => e.target.style.display = 'block'}
                       onError={(e) => e.target.style.display = 'none'}
                     />
                   )}
@@ -2239,6 +2308,7 @@ export default function App() {
                       src={contributeForm.poster_url} 
                       alt="Preview" 
                       className="poster-preview-box" 
+                      onLoad={(e) => e.target.style.display = 'block'}
                       onError={(e) => e.target.style.display = 'none'}
                     />
                   )}
