@@ -108,6 +108,7 @@ export default function App() {
   const [submittingReview, setSubmittingReview] = useState(false);
   const [isEditingMyReview, setIsEditingMyReview] = useState(false);
   const [isPlayingVideo, setIsPlayingVideo] = useState(false);
+  const [theaterMovie, setTheaterMovie] = useState(null); // Dedicated Fullscreen Cinema Theater Modal
 
   // AI Matchmaker Modal State
   const [showAiModal, setShowAiModal] = useState(false);
@@ -246,9 +247,13 @@ export default function App() {
 
   // Open movie details & reviews (with optional autoPlay for direct stream)
   const handleOpenMovie = async (movie, autoPlay = false) => {
+    if (autoPlay && movie.video_url) {
+      setTheaterMovie(movie);
+      return;
+    }
     setSelectedMovie(movie);
     setIsEditingMyReview(false);
-    setIsPlayingVideo(autoPlay);
+    setIsPlayingVideo(false);
     setReviewForm({ rating: 5, comment: '' });
     try {
       const res = await fetch(`${apiBase}/movies/${movie.id}/`);
@@ -260,6 +265,17 @@ export default function App() {
       console.error('Error loading movie details:', err);
     }
   };
+
+  // Keyboard shortcut: ESC to exit Cinema Theater mode
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape' && theaterMovie) {
+        setTheaterMovie(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [theaterMovie]);
 
   const handleStartEditMyReview = (existingRev) => {
     setReviewForm({ rating: existingRev.rating, comment: existingRev.comment });
@@ -670,10 +686,7 @@ export default function App() {
       {/* NAVBAR */}
       <header className="navbar">
         <div className="brand-section" onClick={() => setCurrentView('explore')}>
-          <div className="brand-icon">
-            <Film size={22} />
-          </div>
-          <span className="brand-name">CineMatch</span>
+          <img src="/logo.png" alt="CineMatch" className="brand-logo-img" />
         </div>
 
         {/* SEARCH BAR (Live Async Engine) */}
@@ -1217,9 +1230,12 @@ export default function App() {
                     {selectedMovie.video_url && (
                       <button 
                         className="watch-player-btn"
-                        onClick={() => setIsPlayingVideo(!isPlayingVideo)}
+                        onClick={() => {
+                          setTheaterMovie(selectedMovie);
+                        }}
+                        title="Open in Cinema Theater"
                       >
-                        <Play size={15} fill="currentColor" /> {isPlayingVideo ? 'Close Player' : 'Watch Movie / Stream'}
+                        <Play size={15} fill="currentColor" /> Watch in Cinema Theater
                       </button>
                     )}
 
@@ -1247,39 +1263,12 @@ export default function App() {
                         style={{ borderColor: '#ef4444', color: '#fca5a5' }}
                         onClick={(e) => handleDeleteMovie(e, String(selectedMovie.id))}
                       >
-                        <Trash2 size={16} /> Delete Film
+                        <Trash2 size={15} /> Delete Film
                       </button>
                     )}
                   </div>
                 </div>
               </div>
-
-              {/* EMBEDDED THEATER STREAMING PLAYER */}
-              {isPlayingVideo && getYouTubeEmbedUrl(selectedMovie.video_url) && (
-                <div className="movie-player-wrapper">
-                  <div className="movie-player-header">
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '0.9rem' }}>
-                      <Play size={14} fill="currentColor" color="var(--accent-red)" /> Streaming: {selectedMovie.title}
-                    </span>
-                    <button 
-                      className="close-player-btn"
-                      onClick={() => setIsPlayingVideo(false)}
-                      title="Close Player"
-                    >
-                      <X size={14} /> Close Player
-                    </button>
-                  </div>
-                  <div className="video-responsive-box">
-                    <iframe
-                      src={getYouTubeEmbedUrl(selectedMovie.video_url)}
-                      title={`${selectedMovie.title} Stream`}
-                      frameBorder="0"
-                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                      allowFullScreen
-                    />
-                  </div>
-                </div>
-              )}
 
               {/* REVIEWS SECTION */}
               <div className="reviews-section">
@@ -2007,6 +1996,88 @@ export default function App() {
                     </div>
                   ))
                 )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* FULLSCREEN CINEMA THEATER MODAL (OPTION 1) */}
+      {theaterMovie && getYouTubeEmbedUrl(theaterMovie.video_url) && (
+        <div className="theater-overlay" onClick={() => setTheaterMovie(null)}>
+          <div className="theater-container" onClick={(e) => e.stopPropagation()}>
+            {/* Ambient Poster Glow */}
+            <div 
+              className="theater-ambient-glow"
+              style={{ backgroundImage: `url(${theaterMovie.poster_url || SAMPLE_POSTERS[0]})` }}
+            />
+
+            {/* Theater Top Navigation Bar */}
+            <div className="theater-header">
+              <div className="theater-movie-info">
+                <div className="theater-badge">
+                  <Play size={12} fill="currentColor" />
+                  <span>Cinema Theater</span>
+                </div>
+                <h2 className="theater-title">{theaterMovie.title}</h2>
+                <span className="theater-year">({theaterMovie.release_year})</span>
+                {theaterMovie.global_rating > 0 && (
+                  <div className="theater-rating">
+                    <Star size={13} fill="#f59e0b" color="#f59e0b" />
+                    <span>{Number(theaterMovie.global_rating).toFixed(1)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="theater-actions">
+                <button 
+                  className={`theater-action-btn ${watchlistIds.includes(String(theaterMovie.id)) ? 'active' : ''}`}
+                  onClick={(e) => handleToggleWatchlist(e, String(theaterMovie.id))}
+                  title={watchlistIds.includes(String(theaterMovie.id)) ? "In your watchlist" : "Add to watchlist"}
+                >
+                  <Bookmark size={15} fill={watchlistIds.includes(String(theaterMovie.id)) ? "currentColor" : "none"} />
+                  <span>{watchlistIds.includes(String(theaterMovie.id)) ? 'Bookmarked' : 'Watchlist'}</span>
+                </button>
+
+                <button 
+                  className="theater-action-btn"
+                  onClick={() => {
+                    handleOpenMovie(theaterMovie, false);
+                  }}
+                  title="View Reviews & Film Details"
+                >
+                  <Info size={15} />
+                  <span>Details & Reviews</span>
+                </button>
+
+                <button 
+                  className="theater-close-btn"
+                  onClick={() => setTheaterMovie(null)}
+                  title="Exit Theater Mode (Esc)"
+                >
+                  <X size={18} />
+                  <span>Exit Theater</span>
+                </button>
+              </div>
+            </div>
+
+            {/* 16:9 Cinema Screen Wrapper */}
+            <div className="theater-screen-wrapper">
+              <iframe
+                src={getYouTubeEmbedUrl(theaterMovie.video_url)}
+                title={`${theaterMovie.title} Cinema Stream`}
+                className="theater-iframe"
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                allowFullScreen
+              />
+            </div>
+
+            {/* Bottom Info Bar */}
+            {theaterMovie.synopsis && (
+              <div className="theater-bottom-bar">
+                <p className="theater-synopsis">{theaterMovie.synopsis}</p>
+                <span className="theater-esc-hint">Press <strong>ESC</strong> to exit theater mode</span>
               </div>
             )}
           </div>

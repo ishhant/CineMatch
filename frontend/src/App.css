@@ -25,6 +25,20 @@
   gap: 0.75rem;
   cursor: pointer;
   text-decoration: none;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.brand-section:hover {
+  opacity: 0.92;
+  transform: translateY(-1px);
+}
+
+.brand-logo-img {
+  height: 38px;
+  width: auto;
+  max-width: 170px;
+  object-fit: contain;
+  display: block;
 }
 
 .brand-icon {
@@ -2166,4 +2180,242 @@
     justify-content: flex-end;
   }
 }
+
+/* ==========================================================================
+   FULLSCREEN CINEMA THEATER MODAL (OPTION 1)
+   ========================================================================== */
+
+.theater-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(5, 7, 12, 0.94);
+  backdrop-filter: blur(28px) saturate(1.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: theaterFadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes theaterFadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.theater-container {
+  position: relative;
+  width: 100%;
+  max-width: 1180px;
+  background: #090b11;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.9), 0 0 40px rgba(229, 9, 20, 0.15);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ambient Poster Glow */
+.theater-ambient-glow {
+  position: absolute;
+  inset: -60px;
+  background-size: cover;
+  background-position: center;
+  filter: blur(80px) brightness(0.18) saturate(1.8);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.8;
+}
+
+/* Header */
+.theater-header {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: linear-gradient(180deg, rgba(15, 18, 25, 0.95) 0%, rgba(15, 18, 25, 0.7) 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.theater-movie-info {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.theater-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--accent-red);
+  color: #fff;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.theater-title {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: #fff;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.theater-year {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.theater-rating {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.12);
+  padding: 0.15rem 0.45rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.theater-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.theater-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-main);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.theater-action-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.theater-action-btn.active {
+  background: rgba(229, 9, 20, 0.15);
+  border-color: var(--accent-red);
+  color: #f87171;
+}
+
+.theater-close-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.95rem;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.theater-close-btn:hover {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.4);
+}
+
+/* 16:9 Screen */
+.theater-screen-wrapper {
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  padding-bottom: 56.25%; /* 16:9 Aspect Ratio */
+  height: 0;
+  background: #000;
+  overflow: hidden;
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.8);
+}
+
+.theater-iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* Bottom Bar */
+.theater-bottom-bar {
+  position: relative;
+  z-index: 2;
+  padding: 0.85rem 1.5rem;
+  background: rgba(10, 12, 18, 0.9);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.theater-synopsis {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin: 0;
+  max-width: 80%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.theater-esc-hint {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.theater-esc-hint strong {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  color: #e2e8f0;
+}
+
+@media (max-width: 768px) {
+  .theater-overlay {
+    padding: 0.5rem;
+  }
+  .theater-header {
+    padding: 0.75rem 1rem;
+  }
+  .theater-synopsis {
+    max-width: 100%;
+    white-space: normal;
+  }
+  .theater-bottom-bar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
 
