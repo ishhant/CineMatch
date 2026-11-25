@@ -7,6 +7,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.hashers import make_password, check_password
 from movies.db import get_collection, check_connection
+from .decorators import admin_required, get_session_user
 
 def _get_current_user(request):
     """Returns the authenticated user dict from session if valid."""
@@ -681,3 +682,187 @@ def api_ai_match(request):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+# ==============================================================================
+# DJANGO ADMIN PANEL REST API ENDPOINTS
+# ==============================================================================
+
+@csrf_exempt
+@admin_required
+def api_admin_stats(request):
+    """Admin dashboard metrics overview."""
+    try:
+        users_col = get_collection('users')
+        movies_col = get_collection('movies')
+        reviews_col = get_collection('reviews')
+        watchlist_col = get_collection('watchlists')
+
+        total_users = users_col.count_documents({}) if users_col is not None else 0
+        total_movies = movies_col.count_documents({}) if movies_col is not None else 0
+        total_reviews = reviews_col.count_documents({}) if reviews_col is not None else 0
+        total_watchlists = watchlist_col.count_documents({}) if watchlist_col is not None else 0
+
+        # Calculate platform average rating
+        avg_rating = 0.0
+        if movies_col is not None and total_movies > 0:
+            movies_with_rating = list(movies_col.find({"global_rating": {"$gt": 0}}))
+            if movies_with_rating:
+                avg_rating = round(sum(float(m.get('global_rating', 0)) for m in movies_with_rating) / len(movies_with_rating), 1)
+
+        return JsonResponse({
+            "success": True,
+            "stats": {
+                "total_users": total_users,
+                "total_movies": total_movies,
+                "total_reviews": total_reviews,
+                "total_watchlists": total_watchlists,
+                "avg_rating": avg_rating
+            }
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@admin_required
+def api_admin_users(request):
+    """Returns list of registered users with activity stats."""
+    try:
+        users_col = get_collection('users')
+        reviews_col = get_collection('reviews')
+        watchlist_col = get_collection('watchlists')
+
+        if users_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        user_docs = list(users_col.find().sort("created_at", -1))
+        users_list = []
+        for u in user_docs:
+            uname = u.get('username', '')
+            rev_count = reviews_col.count_documents({"username": {"$regex": f"^{uname}$", "$options": "i"}}) if reviews_col is not None else 0
+            watch_count = watchlist_col.count_documents({"username": uname}) if watchlist_col is not None else 0
+
+            users_list.append({
+                "id": str(u['_id']),
+                "username": uname,
+                "email": u.get('email', ''),
+                "is_staff": bool(u.get('is_staff', False)),
+                "created_at": u.get('created_at', 'N/A'),
+                "reviews_count": rev_count,
+                "watchlist_count": watch_count
+            })
+
+        return JsonResponse({
+            "success": True,
+            "count": len(users_list),
+            "users": users_list
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@admin_required
+def api_admin_toggle_user_role(request, user_id):
+    """Toggles user staff/admin role."""
+    if request.method != 'POST':
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        users_col = get_collection('users')
+        if users_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        query = {"_id": ObjectId(user_id)} if ObjectId.is_valid(user_id) else {"_id": user_id}
+        target_user = users_col.find_one(query)
+        if not target_user:
+            return JsonResponse({"error": "User not found"}, status=404)
+
+        current_user = get_session_user(request)
+        if current_user and str(current_user.get('id')) == str(target_user['_id']):
+            return JsonResponse({"error": "Cannot change your own admin privileges."}, status=400)
+
+        new_role = not target_user.get('is_staff', False)
+        users_col.update_one(query, {"$set": {"is_staff": new_role}})
+
+        return JsonResponse({
+            "success": True,
+            "user_id": str(target_user['_id']),
+            "username": target_user['username'],
+            "is_staff": new_role,
+            "message": f"User '{target_user['username']}' is now {'an Admin' if new_role else 'a Member'}."
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@admin_required
+def api_admin_delete_user(request, user_id):
+    """Deletes a user and cascades deletion of their reviews and watchlist."""
+    if request.method not in ('POST', 'DELETE'):
+        return JsonResponse({"error": "Method not allowed"}, status=405)
+    try:
+        users_col = get_collection('users')
+        reviews_col = get_collection('reviews')
+        watchlist_col = get_collection('watchlists')
+
+        if users_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        query = {"_id": ObjectId(user_id)} if ObjectId.is_valid(user_id) else {"_id": user_id}
+        target_user = users_col.find_one(query)
+        if not target_user:
+            return JsonResponse({"error": "User not found"}, status=404)
+
+        current_user = get_session_user(request)
+        if current_user and str(current_user.get('id')) == str(target_user['_id']):
+            return JsonResponse({"error": "Cannot delete your own account from admin panel."}, status=400)
+
+        username = target_user['username']
+        users_col.delete_one(query)
+
+        # Cleanup user's reviews and watchlist
+        if reviews_col is not None:
+            reviews_col.delete_many({"username": {"$regex": f"^{username}$", "$options": "i"}})
+        if watchlist_col is not None:
+            watchlist_col.delete_many({"username": username})
+
+        return JsonResponse({
+            "success": True,
+            "message": f"User '{username}' and their data have been removed."
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+@csrf_exempt
+@admin_required
+def api_admin_recent_reviews(request):
+    """Returns recent platform reviews across all movies for moderation."""
+    try:
+        reviews_col = get_collection('reviews')
+        movies_col = get_collection('movies')
+
+        if reviews_col is None:
+            return JsonResponse({"error": "Database not connected"}, status=503)
+
+        raw_reviews = list(reviews_col.find().sort("created_at", -1).limit(40))
+        results = []
+
+        # Cache movie titles to avoid redundant queries
+        movie_title_map = {}
+        for r in raw_reviews:
+            mid = str(r.get('movie_id', ''))
+            if mid not in movie_title_map and movies_col is not None:
+                mquery = {"_id": ObjectId(mid)} if ObjectId.is_valid(mid) else {"title": mid}
+                mdoc = movies_col.find_one(mquery)
+                movie_title_map[mid] = mdoc.get('title', 'Unknown Movie') if mdoc else 'Unknown Movie'
+
+            serialized = _serialize_mongo_doc(r)
+            serialized['movie_title'] = movie_title_map.get(mid, 'Unknown Movie')
+            results.append(serialized)
+
+        return JsonResponse({
+            "success": True,
+            "count": len(results),
+            "reviews": results
+        })
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+

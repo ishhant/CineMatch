@@ -17,4 +17,9 @@ urlpatterns = [
     path('auth/logout/', views.api_logout, name='api_logout'),
     path('auth/status/', views.api_auth_status, name='api_auth_status'),
     path('ai-match/', views.api_ai_match, name='api_ai_match'),
+    path('admin-panel/stats/', views.api_admin_stats, name='admin_stats'),
+    path('admin-panel/users/', views.api_admin_users, name='admin_users'),
+    path('admin-panel/users/<str:user_id>/role/', views.api_admin_toggle_user_role, name='admin_toggle_role'),
+    path('admin-panel/users/<str:user_id>/delete/', views.api_admin_delete_user, name='admin_delete_user'),
+    path('admin-panel/reviews/', views.api_admin_recent_reviews, name='admin_recent_reviews'),
 ]

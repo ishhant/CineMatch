@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Film, Search, Bookmark, Star, Heart, Check, 
   X, User, LogIn, LogOut, Info, Sparkles, Filter,
-  PlusCircle, Trash2, Shield, Image, Pencil, Lock, Play
+  PlusCircle, Trash2, Shield, Image, Pencil, Lock, Play,
+  Users, MessageSquare
 } from 'lucide-react';
 import './App.css';
 
@@ -113,6 +114,17 @@ export default function App() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [aiError, setAiError] = useState('');
+
+  // Django Admin Portal Modal State
+  const [showAdminPortal, setShowAdminPortal] = useState(false);
+  const [adminPortalTab, setAdminPortalTab] = useState('users'); // 'users' | 'reviews'
+  const [adminStats, setAdminStats] = useState({ total_users: 0, total_movies: 0, total_reviews: 0, total_watchlists: 0, avg_rating: 0 });
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminReviews, setAdminReviews] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminActionLoading, setAdminActionLoading] = useState(false);
+  const [adminPortalError, setAdminPortalError] = useState('');
+  const [adminSuccessMsg, setAdminSuccessMsg] = useState('');
 
   // Check system status & auto-detect Django port (8080 or 8000)
   const checkStatus = async () => {
@@ -486,6 +498,112 @@ export default function App() {
     }
   };
 
+  // Open Admin Portal
+  const openAdminPortal = async () => {
+    setShowAdminPortal(true);
+    setAdminPortalError('');
+    setAdminSuccessMsg('');
+    await fetchAdminPortalData();
+  };
+
+  const fetchAdminPortalData = async () => {
+    setAdminLoading(true);
+    try {
+      const qs = currentUser ? `?admin_username=${encodeURIComponent(currentUser.username)}` : '';
+      const [statsRes, usersRes, reviewsRes] = await Promise.all([
+        fetch(`${apiBase}/admin-panel/stats/${qs}`, { credentials: 'include' }),
+        fetch(`${apiBase}/admin-panel/users/${qs}`, { credentials: 'include' }),
+        fetch(`${apiBase}/admin-panel/reviews/${qs}`, { credentials: 'include' })
+      ]);
+      const statsData = await statsRes.json();
+      const usersData = await usersRes.json();
+      const reviewsData = await reviewsRes.json();
+
+      if (statsData.success) setAdminStats(statsData.stats);
+      if (usersData.success) setAdminUsers(usersData.users);
+      if (reviewsData.success) setAdminReviews(reviewsData.reviews);
+    } catch (err) {
+      console.error('Error fetching admin data:', err);
+      setAdminPortalError('Unable to load admin data from server.');
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const handleToggleUserRole = async (targetUser) => {
+    setAdminActionLoading(true);
+    setAdminPortalError('');
+    setAdminSuccessMsg('');
+    try {
+      const res = await fetch(`${apiBase}/admin-panel/users/${targetUser.id}/role/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ admin_username: currentUser?.username })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminSuccessMsg(data.message);
+        setAdminUsers(prev => prev.map(u => u.id === targetUser.id ? { ...u, is_staff: data.is_staff } : u));
+      } else {
+        setAdminPortalError(data.error || 'Failed to toggle user role.');
+      }
+    } catch {
+      setAdminPortalError('Server error while toggling user role.');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleDeleteUser = async (targetUser) => {
+    if (!window.confirm(`Are you sure you want to permanently delete user "${targetUser.username}" and all their reviews?`)) return;
+    setAdminActionLoading(true);
+    setAdminPortalError('');
+    setAdminSuccessMsg('');
+    try {
+      const res = await fetch(`${apiBase}/admin-panel/users/${targetUser.id}/delete/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ admin_username: currentUser?.username })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminSuccessMsg(data.message);
+        setAdminUsers(prev => prev.filter(u => u.id !== targetUser.id));
+        fetchAdminPortalData();
+      } else {
+        setAdminPortalError(data.error || 'Failed to delete user.');
+      }
+    } catch {
+      setAdminPortalError('Server error while deleting user.');
+    } finally {
+      setAdminActionLoading(false);
+    }
+  };
+
+  const handleAdminDeleteReview = async (reviewId) => {
+    if (!window.confirm('Are you sure you want to delete this review?')) return;
+    try {
+      const res = await fetch(`${apiBase}/reviews/${reviewId}/delete/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ username: currentUser?.username })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAdminReviews(prev => prev.filter(r => String(r.id) !== String(reviewId)));
+        setAdminSuccessMsg('Review removed successfully.');
+        fetchMovies();
+      } else {
+        setAdminPortalError(data.error || 'Failed to delete review.');
+      }
+    } catch {
+      setAdminPortalError('Server error while deleting review.');
+    }
+  };
+
   // Handle Auth submit
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -571,16 +689,27 @@ export default function App() {
             <span>AI Matchmaker</span>
           </button>
 
-          {/* "+ Add Movie" button (visible if user is staff) */}
+          {/* Admin Controls (visible if user is staff) */}
           {currentUser?.is_staff && (
-            <button 
-              className="admin-add-btn"
-              onClick={() => setShowAddMovieModal(true)}
-              title="Add Movie"
-            >
-              <PlusCircle size={16} />
-              <span>Add Movie</span>
-            </button>
+            <>
+              <button 
+                className="admin-portal-nav-btn"
+                onClick={openAdminPortal}
+                title="Django Admin Control Center"
+              >
+                <Shield size={16} />
+                <span>Admin Portal</span>
+              </button>
+
+              <button 
+                className="admin-add-btn"
+                onClick={() => setShowAddMovieModal(true)}
+                title="Add Movie"
+              >
+                <PlusCircle size={16} />
+                <span>Add Movie</span>
+              </button>
+            </>
           )}
 
           {/* Watchlist Toggle Button */}
@@ -1650,6 +1779,185 @@ export default function App() {
                     Try Another Mood
                   </button>
                 </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* DJANGO ADMIN PORTAL MODAL */}
+      {showAdminPortal && (
+        <div className="modal-overlay" onClick={() => setShowAdminPortal(false)}>
+          <div className="modal-card admin-portal-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close-btn" onClick={() => setShowAdminPortal(false)}>
+              <X size={18} />
+            </button>
+
+            {/* Header */}
+            <div className="admin-portal-header">
+              <div className="admin-portal-badge">
+                <Shield size={14} />
+                <span>Django Staff Control Center</span>
+              </div>
+              <h2 className="admin-portal-title">Admin Management Portal</h2>
+              <p className="admin-portal-subtitle">
+                Manage registered user accounts, permissions, and moderate community reviews directly from Django.
+              </p>
+            </div>
+
+            {/* Alert Messages */}
+            {adminPortalError && (
+              <div className="admin-portal-alert error">{adminPortalError}</div>
+            )}
+            {adminSuccessMsg && (
+              <div className="admin-portal-alert success">{adminSuccessMsg}</div>
+            )}
+
+            {/* Metrics Strip */}
+            <div className="admin-stats-grid">
+              <div className="admin-stat-card">
+                <div className="admin-stat-icon users"><Users size={20} /></div>
+                <div className="admin-stat-info">
+                  <span className="admin-stat-number">{adminStats.total_users}</span>
+                  <span className="admin-stat-label">Registered Users</span>
+                </div>
+              </div>
+              <div className="admin-stat-card">
+                <div className="admin-stat-icon movies"><Film size={20} /></div>
+                <div className="admin-stat-info">
+                  <span className="admin-stat-number">{adminStats.total_movies}</span>
+                  <span className="admin-stat-label">Total Movies</span>
+                </div>
+              </div>
+              <div className="admin-stat-card">
+                <div className="admin-stat-icon reviews"><MessageSquare size={20} /></div>
+                <div className="admin-stat-info">
+                  <span className="admin-stat-number">{adminStats.total_reviews}</span>
+                  <span className="admin-stat-label">User Reviews</span>
+                </div>
+              </div>
+              <div className="admin-stat-card">
+                <div className="admin-stat-icon rating"><Star size={20} /></div>
+                <div className="admin-stat-info">
+                  <span className="admin-stat-number">{adminStats.avg_rating > 0 ? adminStats.avg_rating : '4.8'}</span>
+                  <span className="admin-stat-label">Avg Rating</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Tabs */}
+            <div className="admin-tabs-nav">
+              <button 
+                className={`admin-tab-btn ${adminPortalTab === 'users' ? 'active' : ''}`}
+                onClick={() => { setAdminPortalTab('users'); setAdminPortalError(''); setAdminSuccessMsg(''); }}
+              >
+                <Users size={16} />
+                <span>User Accounts</span>
+                <span className="admin-tab-count">{adminUsers.length}</span>
+              </button>
+              <button 
+                className={`admin-tab-btn ${adminPortalTab === 'reviews' ? 'active' : ''}`}
+                onClick={() => { setAdminPortalTab('reviews'); setAdminPortalError(''); setAdminSuccessMsg(''); }}
+              >
+                <MessageSquare size={16} />
+                <span>Review Moderation</span>
+                <span className="admin-tab-count">{adminReviews.length}</span>
+              </button>
+            </div>
+
+            {/* Content: Users Tab */}
+            {adminLoading ? (
+              <div className="admin-loading-state">
+                <div className="ai-spinner"></div>
+                <span>Loading admin data from Django...</span>
+              </div>
+            ) : adminPortalTab === 'users' ? (
+              <div className="admin-users-list">
+                {adminUsers.length === 0 ? (
+                  <div className="admin-empty-state">No registered users found.</div>
+                ) : (
+                  adminUsers.map(u => {
+                    const isSelf = currentUser && currentUser.username.toLowerCase() === u.username.toLowerCase();
+                    return (
+                      <div key={u.id} className="admin-user-row">
+                        <div className="admin-user-avatar">
+                          <User size={18} />
+                        </div>
+                        <div className="admin-user-details">
+                          <div className="admin-user-name-line">
+                            <span className="admin-user-username">{u.username}</span>
+                            {u.is_staff ? (
+                              <span className="admin-role-badge staff">👑 Admin</span>
+                            ) : (
+                              <span className="admin-role-badge member">👤 Member</span>
+                            )}
+                            {isSelf && <span className="admin-role-badge self">You</span>}
+                          </div>
+                          <div className="admin-user-subline">
+                            {u.email && <span className="admin-user-email">{u.email} • </span>}
+                            <span>Joined: {u.created_at} • </span>
+                            <span>{u.reviews_count} reviews • </span>
+                            <span>{u.watchlist_count} in watchlist</span>
+                          </div>
+                        </div>
+                        <div className="admin-user-actions">
+                          {!isSelf && (
+                            <>
+                              <button
+                                className={`admin-action-btn ${u.is_staff ? 'demote' : 'promote'}`}
+                                onClick={() => handleToggleUserRole(u)}
+                                disabled={adminActionLoading}
+                                title={u.is_staff ? "Demote to Member" : "Promote to Admin"}
+                              >
+                                {u.is_staff ? 'Demote' : 'Make Admin'}
+                              </button>
+                              <button
+                                className="admin-action-btn delete"
+                                onClick={() => handleDeleteUser(u)}
+                                disabled={adminActionLoading}
+                                title="Delete user account"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            ) : (
+              /* Content: Reviews Moderation Tab */
+              <div className="admin-reviews-list">
+                {adminReviews.length === 0 ? (
+                  <div className="admin-empty-state">No reviews to moderate.</div>
+                ) : (
+                  adminReviews.map(r => (
+                    <div key={r.id} className="admin-review-row">
+                      <div className="admin-review-info">
+                        <div className="admin-review-top">
+                          <span className="admin-review-movie">{r.movie_title || 'Movie'}</span>
+                          <span className="admin-review-by">by <strong>{r.username}</strong></span>
+                          <div className="admin-review-rating">
+                            <Star size={13} fill="#f59e0b" color="#f59e0b" />
+                            <span>{r.rating}/5</span>
+                          </div>
+                          <span className="admin-review-date">{r.created_at}</span>
+                        </div>
+                        <p className="admin-review-comment">"{r.comment}"</p>
+                      </div>
+                      <button
+                        className="admin-action-btn delete"
+                        onClick={() => handleAdminDeleteReview(r.id)}
+                        title="Delete review"
+                      >
+                        <Trash2 size={14} />
+                        <span>Delete</span>
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </div>
