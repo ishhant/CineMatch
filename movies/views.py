@@ -619,49 +619,32 @@ def api_ai_match(request):
             '{"matched_ids": ["<movie_id>"], "explanation": "<1-2 sentences personalized reasoning why this fits their vibe>"}'
         )
 
-        # Re-check env or reload dotenv if needed
-        if not gemini_api_key:
-            from dotenv import load_dotenv
-            load_dotenv()
-            gemini_api_key = os.getenv('GEMINI_API_KEY', '').strip()
+        gemini_payload = {
+            "contents": [{
+                "parts": [{
+                    "text": f"{system_prompt}\n\nMovies Catalog:\n{json_lib.dumps(catalog_summary)}\n\nUser Mood / Craving:\n\"{user_mood}\""
+                }]
+            }],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.3
+            }
+        }
 
-        if not gemini_api_key:
-            return JsonResponse({
-                "error": "GEMINI_API_KEY is not configured. Please add GEMINI_API_KEY to your .env file or Render dashboard."
-            }, status=500)
-
-        # Detect OAuth / session tokens accidentally pasted instead of Gemini API keys
-        if gemini_api_key.startswith('AQ.') or '.' in gemini_api_key:
-            return JsonResponse({
-                "error": "Invalid API Key format: The key you provided starts with 'AQ.' which is a temporary OAuth/session token. Real Google Gemini API keys start with 'AIzaSy...'. Please generate a free API key from https://aistudio.google.com/app/apikey"
-            }, status=400)
-
-        models_to_try = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash']
+        # Try active Gemini Flash models in priority order
+        candidate_models = ["gemini-3.5-flash", "gemini-flash-latest", "gemini-2.5-flash", "gemini-1.5-flash"]
         matched_movie_ids = []
         explanation = ""
         last_error = ""
 
-        for model_name in models_to_try:
+        for model_name in candidate_models:
             gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={gemini_api_key}"
-            gemini_payload = {
-                "contents": [{
-                    "parts": [{
-                        "text": f"{system_prompt}\n\nMovies Catalog:\n{json_lib.dumps(catalog_summary)}\n\nUser Mood / Craving:\n\"{user_mood}\""
-                    }]
-                }],
-                "generationConfig": {
-                    "response_mime_type": "application/json",
-                    "temperature": 0.3
-                }
-            }
-
             req = urllib.request.Request(
                 gemini_url,
                 data=json_lib.dumps(gemini_payload).encode('utf-8'),
                 headers={'Content-Type': 'application/json'},
                 method='POST'
             )
-
             try:
                 with urllib.request.urlopen(req, timeout=12) as resp:
                     resp_data = json_lib.loads(resp.read().decode('utf-8'))
@@ -669,23 +652,20 @@ def api_ai_match(request):
                     ai_json = json_lib.loads(text_response)
                     matched_movie_ids = [str(_id) for _id in ai_json.get('matched_ids', [])]
                     explanation = ai_json.get('explanation', '')
-                    last_error = ""
-                    break
+                    if matched_movie_ids:
+                        break
             except urllib.error.HTTPError as http_err:
                 error_body = http_err.read().decode('utf-8', errors='ignore')
-                try:
-                    err_json = json_lib.loads(error_body)
-                    msg = err_json.get('error', {}).get('message', error_body)
-                except Exception:
-                    msg = error_body
-                last_error = f"Google Gemini API error ({http_err.code}): {msg}"
-                if http_err.code == 400 and 'API key not valid' in msg:
-                    break
-            except Exception as e:
-                last_error = f"Failed to connect to Google Gemini API: {str(e)}"
+                last_error = f"{model_name} ({http_err.code}): {error_body}"
+                continue
+            except Exception as gemini_err:
+                last_error = f"{model_name} Error: {str(gemini_err)}"
+                continue
 
-        if last_error and not matched_movie_ids:
-            return JsonResponse({"error": last_error}, status=400 if "API key not valid" in last_error else 502)
+        if not matched_movie_ids:
+            return JsonResponse({
+                "error": f"Failed to get recommendation from Google Gemini: {last_error}"
+            }, status=502)
 
         matched_movies = [m for m in movies if str(m['id']) in matched_movie_ids]
         if not matched_movies and movies:
