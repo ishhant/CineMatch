@@ -69,6 +69,7 @@ def api_movies_list(request):
     genre_query = request.GET.get('genre', '').strip()
     min_rating = request.GET.get('min_rating', '').strip()
     available_only = request.GET.get('available', '').strip().lower()
+    sort_by = request.GET.get('sort', 'newest').strip().lower()
 
     col = get_collection('movies')
     if col is not None:
@@ -97,8 +98,24 @@ def api_movies_list(request):
             if available_only in ('1', 'true', 'yes'):
                 filters.append({'video_url': {'$exists': True, '$nin': ['', None]}})
 
+            # Determine sort order
+            if sort_by == 'rating_desc':
+                sort_fields = [('global_rating', -1), ('created_at', -1)]
+            elif sort_by == 'rating_asc':
+                sort_fields = [('global_rating', 1), ('created_at', -1)]
+            elif sort_by == 'year_desc':
+                sort_fields = [('release_year', -1), ('created_at', -1)]
+            elif sort_by == 'year_asc':
+                sort_fields = [('release_year', 1), ('created_at', -1)]
+            elif sort_by == 'title_asc':
+                sort_fields = [('title', 1)]
+            elif sort_by == 'title_desc':
+                sort_fields = [('title', -1)]
+            else:
+                sort_fields = [('created_at', -1)]
+
             mongo_query = {'$and': filters} if filters else {}
-            cursor = col.find(mongo_query).sort("created_at", -1)
+            cursor = col.find(mongo_query).sort(sort_fields)
             movies = [_serialize_mongo_doc(doc) for doc in cursor]
 
             return JsonResponse({

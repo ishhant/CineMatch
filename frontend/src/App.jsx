@@ -3,7 +3,7 @@ import {
   Film, Search, Bookmark, Star, Heart, Check, 
   X, User, LogIn, LogOut, Info, Sparkles, Filter,
   PlusCircle, Trash2, Shield, Image, Pencil, Lock, Play,
-  Users, MessageSquare
+  Users, MessageSquare, ArrowUpDown
 } from 'lucide-react';
 import './App.css';
 
@@ -60,6 +60,7 @@ export default function App() {
   const [selectedGenre, setSelectedGenre] = useState('All');
   const [minRating, setMinRating] = useState('');
   const [availableOnly, setAvailableOnly] = useState(false);
+  const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'rating_desc' | 'rating_asc' | 'year_desc' | 'year_asc' | 'title_asc' | 'title_desc'
   
   // Watchlist & View
   const [watchlistIds, setWatchlistIds] = useState([]);
@@ -188,6 +189,7 @@ export default function App() {
       if (selectedGenre !== 'All') params.append('genre', selectedGenre);
       if (minRating) params.append('min_rating', minRating);
       if (availableOnly) params.append('available', 'true');
+      if (sortBy) params.append('sort', sortBy);
 
       const res = await fetch(`${base}/movies/?${params.toString()}`);
       const data = await res.json();
@@ -218,7 +220,7 @@ export default function App() {
       fetchMovies(apiBase);
     }, 250);
     return () => clearTimeout(delayDebounce);
-  }, [searchQuery, selectedGenre, minRating, availableOnly, apiBase]);
+  }, [searchQuery, selectedGenre, minRating, availableOnly, sortBy, apiBase]);
 
   // Toggle movie in watchlist
   const handleToggleWatchlist = async (e, movieId) => {
@@ -645,9 +647,21 @@ export default function App() {
   const baseMovies = currentView === 'watchlist'
     ? movies.filter(m => watchlistIds.includes(String(m.id)))
     : movies;
-  const displayedMovies = availableOnly
+  const filteredAvailable = availableOnly
     ? baseMovies.filter(m => m.video_url && m.video_url.trim().length > 0)
     : baseMovies;
+
+  const displayedMovies = currentView === 'watchlist'
+    ? [...filteredAvailable].sort((a, b) => {
+        if (sortBy === 'rating_desc') return (b.global_rating || 0) - (a.global_rating || 0);
+        if (sortBy === 'rating_asc') return (a.global_rating || 0) - (b.global_rating || 0);
+        if (sortBy === 'year_desc') return (b.release_year || 0) - (a.release_year || 0);
+        if (sortBy === 'year_asc') return (a.release_year || 0) - (b.release_year || 0);
+        if (sortBy === 'title_asc') return (a.title || '').localeCompare(b.title || '');
+        if (sortBy === 'title_desc') return (b.title || '').localeCompare(a.title || '');
+        return 0;
+      })
+    : filteredAvailable;
 
   const featuredMovie = movies[0];
 
@@ -858,14 +872,49 @@ export default function App() {
                   <option value="3.0">3.0+ Stars</option>
                 </select>
               </div>
+
+              <div className="sort-filter">
+                <ArrowUpDown size={15} />
+                <span>Sort By:</span>
+                <select 
+                  className="sort-select"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                >
+                  <option value="newest">Recently Added</option>
+                  <option value="rating_desc">Highest Rated ⭐</option>
+                  <option value="year_desc">Release Year (Newest)</option>
+                  <option value="year_asc">Release Year (Classic)</option>
+                  <option value="title_asc">Title (A to Z)</option>
+                  <option value="title_desc">Title (Z to A)</option>
+                </select>
+              </div>
             </div>
           </div>
         ) : (
-          <div style={{ marginBottom: '2rem' }}>
-            <h2 style={{ fontSize: '1.6rem', fontWeight: 700 }}>Your Private Watchlist</h2>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-              Films you've bookmarked to watch later.
-            </p>
+          <div style={{ marginBottom: '2rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
+            <div>
+              <h2 style={{ fontSize: '1.6rem', fontWeight: 700 }}>Your Private Watchlist</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+                Films you've bookmarked to watch later.
+              </p>
+            </div>
+            <div className="sort-filter">
+              <ArrowUpDown size={15} />
+              <span>Sort By:</span>
+              <select 
+                className="sort-select"
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+              >
+                <option value="newest">Default Order</option>
+                <option value="rating_desc">Highest Rated ⭐</option>
+                <option value="year_desc">Release Year (Newest)</option>
+                <option value="year_asc">Release Year (Classic)</option>
+                <option value="title_asc">Title (A to Z)</option>
+                <option value="title_desc">Title (Z to A)</option>
+              </select>
+            </div>
           </div>
         )}
 
