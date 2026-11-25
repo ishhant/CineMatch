@@ -107,6 +107,13 @@ export default function App() {
   const [isEditingMyReview, setIsEditingMyReview] = useState(false);
   const [isPlayingVideo, setIsPlayingVideo] = useState(false);
 
+  // AI Matchmaker Modal State
+  const [showAiModal, setShowAiModal] = useState(false);
+  const [aiMoodInput, setAiMoodInput] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResult, setAiResult] = useState(null);
+  const [aiError, setAiError] = useState('');
+
   // Check system status & auto-detect Django port (8080 or 8000)
   const checkStatus = async () => {
     for (const candidate of API_CANDIDATES) {
@@ -448,6 +455,37 @@ export default function App() {
     }
   };
 
+  // AI Mood Matchmaker
+  const handleAiMatch = async (overrideMood) => {
+    const moodQuery = (typeof overrideMood === 'string' ? overrideMood : aiMoodInput).trim();
+    if (!moodQuery) {
+      setAiError('Please enter your mood or choose a vibe tag below.');
+      return;
+    }
+    setAiLoading(true);
+    setAiError('');
+    if (typeof overrideMood === 'string') {
+      setAiMoodInput(overrideMood);
+    }
+    try {
+      const res = await fetch(`${apiBase}/ai-match/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mood: moodQuery })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAiResult(data);
+      } else {
+        setAiError(data.error || 'Failed to find matching movies.');
+      }
+    } catch {
+      setAiError('Unable to connect to AI engine. Please verify the Django backend is running.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   // Handle Auth submit
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -520,6 +558,19 @@ export default function App() {
 
         {/* ACTIONS & AUTH */}
         <div className="nav-actions">
+          {/* AI Mood Matchmaker button */}
+          <button 
+            className="ai-nav-btn"
+            onClick={() => {
+              setShowAiModal(true);
+              setAiError('');
+            }}
+            title="AI Mood Matchmaker"
+          >
+            <Sparkles size={16} className="ai-nav-sparkle" />
+            <span>AI Matchmaker</span>
+          </button>
+
           {/* "+ Add Movie" button (visible if user is staff) */}
           {currentUser?.is_staff && (
             <button 
@@ -1395,6 +1446,212 @@ export default function App() {
               </button>
 
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* AI MOOD MATCHMAKER MODAL */}
+      {showAiModal && (
+        <div className="modal-overlay" onClick={() => setShowAiModal(false)}>
+          <div className="modal-card ai-modal-card" onClick={(e) => e.stopPropagation()}>
+            <button className="modal-close-btn" onClick={() => setShowAiModal(false)}>
+              <X size={18} />
+            </button>
+
+            <div className="ai-modal-header">
+              <div className="ai-badge">
+                <Sparkles size={14} />
+                <span>CineMatch AI Engine</span>
+              </div>
+              <h2 className="ai-modal-title">What's your mood tonight?</h2>
+              <p className="ai-modal-desc">
+                Describe the vibe, feeling, or plot craving in your own words. CineMatch AI will analyze your mood and hand-pick the best matching movies.
+              </p>
+            </div>
+
+            {/* Quick Mood Pills */}
+            <div className="ai-quick-tags-section">
+              <span className="ai-quick-label">⚡ Quick Mood Vibes:</span>
+              <div className="ai-quick-tags">
+                {[
+                  { label: "🌧️ Dark & Suspenseful", mood: "dark atmospheric thriller suspense mystery" },
+                  { label: "💰 Greed & Ancient Mystery", mood: "greed treasure ancient curse dark mythology" },
+                  { label: "✨ Whimsical & Dreamy", mood: "whimsical magical emotional anime family fantasy" },
+                  { label: "🎭 Intense Crime & Revenge", mood: "intense gritty crime revenge tragedy drama" },
+                  { label: "🍿 Mind-Bending Sci-Fi", mood: "mind-bending sci-fi futuristic twists concept" },
+                  { label: "😂 Feel-Good & Heartwarming", mood: "feel good funny heartwarming family emotional" }
+                ].map((item, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    className="ai-quick-tag"
+                    onClick={() => handleAiMatch(item.mood)}
+                    disabled={aiLoading}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Input Form */}
+            <form 
+              className="ai-prompt-form" 
+              onSubmit={(e) => { e.preventDefault(); handleAiMatch(); }}
+            >
+              <div className="ai-input-wrapper">
+                <textarea
+                  className="ai-mood-textarea"
+                  rows={3}
+                  placeholder="e.g. A slow-burning murder mystery on a rainy night with philosophical depth and surprising twists..."
+                  value={aiMoodInput}
+                  onChange={(e) => setAiMoodInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleAiMatch();
+                    }
+                  }}
+                  disabled={aiLoading}
+                />
+              </div>
+
+              {aiError && <div className="ai-error-banner">{aiError}</div>}
+
+              <div className="ai-action-row">
+                <button 
+                  type="submit" 
+                  className="ai-submit-btn" 
+                  disabled={aiLoading || !aiMoodInput.trim()}
+                >
+                  <Sparkles size={16} />
+                  <span>{aiLoading ? 'Analyzing Mood...' : 'Match My Mood ✨'}</span>
+                </button>
+              </div>
+            </form>
+
+            {/* Loading Indicator */}
+            {aiLoading && (
+              <div className="ai-loading-container">
+                <div className="ai-spinner"></div>
+                <div className="ai-loading-text">
+                  <strong>Analyzing cinematic themes, mood tones & catalog...</strong>
+                  <span>Matching the best movie to your exact emotional craving</span>
+                </div>
+              </div>
+            )}
+
+            {/* AI Results */}
+            {aiResult && !aiLoading && (
+              <div className="ai-results-wrapper">
+                {/* AI Reasoning card */}
+                <div className="ai-reasoning-card">
+                  <div className="ai-reasoning-header">
+                    <span className="ai-reasoning-title">
+                      <Sparkles size={15} />
+                      AI Match Analysis
+                    </span>
+                    <span className="ai-engine-tag">
+                      {aiResult.engine === 'gemini' ? '⚡ Google Gemini 1.5' : '🧠 Semantic Content NLP'}
+                    </span>
+                  </div>
+                  <p className="ai-reasoning-text">"{aiResult.explanation}"</p>
+                </div>
+
+                {/* Matched Movies Cards */}
+                <div className="ai-matches-list">
+                  <h3 className="ai-matches-heading">Recommended For You</h3>
+                  {aiResult.matches && aiResult.matches.map((movie) => {
+                    const isWatchlist = watchlistIds.includes(String(movie.id));
+                    const movieGenres = getMovieGenres(movie);
+                    return (
+                      <div key={movie.id} className="ai-match-card">
+                        <img 
+                          src={movie.poster_url || SAMPLE_POSTERS[0]} 
+                          alt={movie.title} 
+                          className="ai-match-poster"
+                          onClick={() => {
+                            setShowAiModal(false);
+                            handleOpenMovie(movie, false);
+                          }}
+                        />
+                        <div className="ai-match-info">
+                          <div className="ai-match-title-row">
+                            <h4 
+                              className="ai-match-title"
+                              onClick={() => {
+                                setShowAiModal(false);
+                                handleOpenMovie(movie, false);
+                              }}
+                            >
+                              {movie.title}
+                            </h4>
+                            <span className="ai-match-year">({movie.release_year})</span>
+                            <div className="ai-match-rating">
+                              <Star size={13} fill="#f59e0b" color="#f59e0b" />
+                              <span>{movie.global_rating !== undefined ? movie.global_rating : 0.0}</span>
+                            </div>
+                          </div>
+
+                          <div className="ai-match-genres">
+                            {movieGenres.map((g, idx) => (
+                              <span key={idx} className="ai-genre-pill">{g}</span>
+                            ))}
+                          </div>
+
+                          <p className="ai-match-synopsis">{movie.synopsis}</p>
+
+                          <div className="ai-match-actions">
+                            {movie.video_url && (
+                              <button 
+                                className="ai-play-btn"
+                                onClick={() => {
+                                  setShowAiModal(false);
+                                  handleOpenMovie(movie, true);
+                                }}
+                              >
+                                <Play size={13} fill="#fff" />
+                                <span>Watch Movie</span>
+                              </button>
+                            )}
+                            <button 
+                              className="ai-details-btn"
+                              onClick={() => {
+                                setShowAiModal(false);
+                                handleOpenMovie(movie, false);
+                              }}
+                            >
+                              <Info size={14} />
+                              <span>Details & Reviews</span>
+                            </button>
+                            <button 
+                              className={`ai-bookmark-btn ${isWatchlist ? 'active' : ''}`}
+                              onClick={(e) => handleToggleWatchlist(e, movie.id)}
+                              title={isWatchlist ? "Remove from watchlist" : "Add to watchlist"}
+                            >
+                              <Bookmark size={15} fill={isWatchlist ? "#e50914" : "none"} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="ai-reset-row">
+                  <button 
+                    type="button" 
+                    className="ai-try-another-btn"
+                    onClick={() => {
+                      setAiResult(null);
+                      setAiMoodInput('');
+                    }}
+                  >
+                    Try Another Mood
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

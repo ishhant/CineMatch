@@ -16,4 +16,5 @@ urlpatterns = [
     path('auth/login/', views.api_login, name='api_login'),
     path('auth/logout/', views.api_logout, name='api_logout'),
     path('auth/status/', views.api_auth_status, name='api_auth_status'),
+    path('ai-match/', views.api_ai_match, name='api_ai_match'),
 ]
